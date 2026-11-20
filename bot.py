@@ -56,7 +56,7 @@ def make_connector(conn_proxy):
     return aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl.create_default_context())
 
 
-async def _create_connector(self, *args, **kwargs):
+def _create_connector(self, *args, **kwargs):
     return make_connector(getattr(self, "_conn_proxy", None))
 
 
@@ -135,8 +135,6 @@ async def _attendi_rete(bot) -> bool:
             print(f"Avviato come @{me.username}")
             return True
         except Exception as e:
-            print(f"Telegram non raggiungibile ({type(e).__name__}), tentativo {i}/3")
-            await asyncio.sleep(5)
     return False
 
 
