@@ -108,7 +108,7 @@ async def start_health_once():
 
 def build_dispatcher() -> Dispatcher:
     for r in (admin_router, anon_router, user_router):
-        r.parent_router = None
+        r._parent_router = None
     dp = Dispatcher()
     dp.include_router(admin_router)
     dp.include_router(anon_router)
