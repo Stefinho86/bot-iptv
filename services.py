@@ -28,16 +28,20 @@ def ocr_bytes(data):
     _ensure_tesseract()
     img = Image.open(io.BytesIO(data)).convert("L")
     w, h = img.size
-    if w < 1600:
-        img = img.resize((w * 2, h * 2), Image.LANCZOS)
-    if sum(img.getdata()) / (w * h) < 110:
+    if w < 2200:
+        k = min(4, max(2, 2200 // max(w, 1)))
+        img = img.resize((w * k, h * k), Image.LANCZOS)
+    if sum(img.getdata()) / (img.size[0] * img.size[1]) < 110:
         img = ImageOps.invert(img)
     img = ImageOps.autocontrast(img)
-    for psm in ("4", "6"):
+    migliore = ""
+    for psm in ("4", "6", "11"):
         out = pytesseract.image_to_string(img, lang="eng", config=f"--oem 3 --psm {psm}")
-        if out.strip():
-            return out
-    return ""
+        if out.count("http") > migliore.count("http"):
+            migliore = out
+        elif not migliore.strip() and out.strip():
+            migliore = out
+    return migliore
       
 import asyncio
 import json
@@ -188,6 +192,11 @@ def _pwd_varianti(pwd):
         x = pwd.replace(a, b)
         if x != pwd and x not in v:
             v.append(x)
+    for x in list(v):
+        if x.endswith(".") and (x[:-1] + "0") not in v:
+            v.append(x[:-1] + "0")
+        if x.endswith("0") and (x[:-1] + ".") not in v:
+            v.append(x[:-1] + ".")        
     return v
     
 async def _test_xtream(session, p: dict) -> Result:
@@ -282,9 +291,9 @@ def _host_voto(text, host):
         return host
     dominio = ".".join(parti[-2:])
     conta = {}
-    pat = r"(?<![a-z0-9.\-@/])[a-z0-9][a-z0-9.\-]*\." + re.escape(dominio)
+    pat = r"(?<![a-z0-9.\-@/])[a-z0-9][a-z0-9.\-@]*\." + re.escape(dominio)
     for m in re.finditer(pat, text, re.I):
-        h = m.group(0).lower().rstrip(".")
+        h = m.group(0).lower().rstrip(".").replace("@", "0")
         conta[h] = conta.get(h, 0) + 1
     if not conta:
         return host
