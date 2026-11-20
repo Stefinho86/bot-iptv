@@ -557,12 +557,11 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
     res = await test_list(item["kind"], item["payload"])
     lid = await db.add_list(item["kind"], item["payload"], item.get("label") or "-", cb.from_user.id)
     await db.set_test(lid, res.ok, res.note)
-    if not res.ok:
-        await db.mark_broken(lid)
     await db.log(cb.from_user.id, "add", f"{lid} {item['kind']} ok={res.ok}")
     await cb.message.edit_text(
-        f"{'Fatto' if res.ok else 'Salvata ma rotta'} - lista #{lid} ({item['kind']}).\n"
-        f"Test: {'superato' if res.ok else 'fallito: ' + res.note}", reply_markup=kb.back())
+        f"Salvata - lista #{lid} ({item['kind']}).\n"
+        f"Test: {'superato' if res.ok else 'non superato: ' + res.note + ' (resta in uso)'}",
+        reply_markup=kb.back())
     if res.frame:
         res.frame.unlink(missing_ok=True)
     await cb.answer()
@@ -739,7 +738,8 @@ async def _bulk_test(msg, ids):
             await db.set_payload(lid, p)
         else:
             rotte += 1
-            await db.mark_broken(lid)
+            await msg.edit_text(f"Test finito: {ok} superati, {rotte} non superati su {len(ids)}.\n"
+                            f"Restano tutti in uso.{coda}")
         if n % 10 == 0:
             try:
                 await msg.edit_text(f"Test {n}/{len(ids)} — funzionanti {ok}, rotte {rotte}")
