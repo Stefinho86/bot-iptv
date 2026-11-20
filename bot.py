@@ -46,7 +46,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="comandi", description="Elenco comandi"),
 ]
 
-TIMEOUT = aiohttp.ClientTimeout(total=15, connect=6)
+TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
 
 
 def make_connector(conn_proxy):
@@ -67,8 +67,8 @@ AiohttpSession.proxy = property(
 )
 
 
-def nuova_sessione(proxy):
-    session = AiohttpSession(timeout=TIMEOUT)
+def nuova_sessione(proxy, api=None):
+    session = AiohttpSession(timeout=TIMEOUT, api=api) if api else AiohttpSession(timeout=TIMEOUT)
     if proxy and proxy.startswith("socks"):
         session._conn_proxy = proxy
         session.proxy = None
@@ -112,16 +112,6 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
-async def _tcp(host, port):
-    try:
-        r, w = await asyncio.wait_for(asyncio.open_connection(host, port), 6)
-        w.close()
-        return True
-    except Exception as e:
-        print(f"   TCP {host}:{port} -> {type(e).__name__}")
-        return False
-
-
 async def _get(url, proxy=None, etichetta=""):
     try:
         conn = make_connector(proxy)
@@ -132,7 +122,7 @@ async def _get(url, proxy=None, etichetta=""):
             async with s.get(url, **kw) as r:
                 corpo = (await r.text())[:90]
                 print(f"   {etichetta}: HTTP {r.status} {corpo}")
-                return r.status < 500
+                return r.status == 200
     except Exception as e:
         print(f"   {etichetta}: {type(e).__name__}")
         return False
@@ -169,37 +159,49 @@ async def _registra_comandi(bot):
 
 async def run_once():
     await db.init()
+
+    api = (os.getenv("TELEGRAM_API") or "").strip().rstrip("/") or None
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
-    api = f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe"
+    base = api or "https://api.telegram.org"
+    getme = f"{base}/bot{config.BOT_TOKEN}/getMe"
 
-    print("--- TEST A: uscita internet generica ---")
-    ipa = await _tcp("1.1.1.1", 443)
-    weba = await _get("https://api.ipify.org", None, "ipify diretto") if ipa else False
+    if api:
+        print(f"Relay configurato: {api}")
 
-    print("--- TEST B: Telegram diretto ---")
-    telegram = await _get(api, None, "telegram diretto") if ipa else False
+    via_relay = via_direct = via_proxy = False
 
-    prox = False
-    if proxy and not telegram:
+    if api:
+        print("--- TEST R: relay ---")
+        via_relay = await _get(getme, None, "telegram via relay")
+
+    if not via_relay:
+        print("--- TEST B: telegram diretto ---")
+        via_direct = await _get(getme, None, "telegram diretto")
+
+    if not via_relay and not via_direct and proxy:
         print(f"--- TEST C: proxy {_mask(proxy)} ---")
-        prox = await _get(api, proxy, "telegram via proxy")
+        via_proxy = await _get(getme, proxy, "telegram via proxy")
 
-    if not weba and not telegram:
-        print("=== VERDETTO: USCITA INTERNET ASSENTE ===")
-        print("Il container non raggiunge nessun host esterno: non e' Telegram.")
-        print("Riprova: Settings -> Restart, oppure cambia regione.")
+    if not (via_relay or via_direct or via_proxy):
+        print("=== NESSUNA VIA VALIDA ===")
+        if not api:
+            print("Crea il relay Cloudflare e imposta TELEGRAM_API")
         await db.close()
         return
 
-    if not telegram and not prox:
-        print("=== VERDETTO: TELEGRAM BLOCCATO, PROXY INUTILIZZABILE ===")
-        await db.close()
-        return
+    if via_relay:
+        print("Via scelta: relay")
+        session = nuova_sessione(None, api)
+        polling_timeout = 20
+    elif via_direct:
+        print("Via scelta: diretta")
+        session = nuova_sessione(None)
+        polling_timeout = 30
+    else:
+        print("Via scelta: proxy")
+        session = nuova_sessione(proxy)
+        polling_timeout = 30
 
-    via_proxy = prox and not telegram
-    print("Via scelta: " + ("proxy" if via_proxy else "diretta"))
-
-    session = nuova_sessione(proxy if via_proxy else None)
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
@@ -221,7 +223,7 @@ async def run_once():
     print("POLLING ATTIVO")
 
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, polling_timeout=polling_timeout)
     finally:
         try:
             await bot.session.close()
