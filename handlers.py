@@ -128,18 +128,21 @@ async def _stato_text(msg, bot):
 
 
 # ==================== VERIFICA ANONIMI ====================
-async def _ask_verify(msg, bot):
+async def _ask_verify(target, bot, edit=False):
     me = await bot.me()
-    tok = kb.new_token(msg.chat.id)
+    tok = kb.new_token(target.chat.id)
     url = f"https://t.me/{me.username}?start=verif_{tok}"
     kbd = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Verifica ora", url=url)],
         [InlineKeyboardButton(text="🔄 Ho verificato", callback_data="v:check")],
     ])
-    await msg.answer("Stai scrivendo in <b>anonimo</b>, quindi non so chi sei.\n\n"
-                     "Premi «Verifica ora»: si apre la chat privata, premi START e la verifica "
-                     "si completa da sola. Vale in modo permanente finché resti admin.",
-                     reply_markup=kbd)
+    testo = ("Stai scrivendo in <b>anonimo</b>, quindi non so chi sei.\n\n"
+             "Premi «Verifica ora»: si apre la chat privata, premi START e la verifica "
+             "si completa da sola. Vale in modo permanente finché resti admin.")
+    if edit:
+        await target.edit_text(testo, reply_markup=kbd)
+    else:
+        await target.answer(testo, reply_markup=kbd)
 
 
 @anon_router.callback_query(F.data == "v:check")
@@ -158,7 +161,7 @@ async def anon_cmd(msg: Message, bot: Bot):
 @anon_router.callback_query(AnonUnverified())
 async def anon_cb(cb: CallbackQuery, bot: Bot):
     await cb.answer("Prima devi verificarti", show_alert=True)
-    await _ask_verify(cb.message, bot)
+    await _ask_verify(cb.message, bot, edit=True)
 
 
 # ==================== UTENTE ====================
@@ -370,7 +373,7 @@ async def deverifica_cmd(msg: Message):
 
 @admin_router.callback_query(F.data == "a:verify")
 async def cb_verify(cb: CallbackQuery, bot: Bot):
-    await _ask_verify(cb.message, bot)
+    await _ask_verify(cb.message, bot, edit=True)
     await cb.answer()
 
 
@@ -400,7 +403,7 @@ async def cb_comandi(cb: CallbackQuery, state: FSMContext):
 async def cb_users(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="utenti")
-    await cb.message.answer("Chi vuoi cercare? Mandami ID o @username." + HINT)
+    await cb.message.edit_text("Chi vuoi cercare? Mandami ID o @username." + HINT)
     await cb.answer()
 
 
@@ -408,7 +411,7 @@ async def cb_users(cb: CallbackQuery, state: FSMContext):
 async def cb_revoca(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
-    await cb.message.answer("Quale assegnazione vuoi revocare? Mandami il numero "
+    await cb.message.edit_text("Quale assegnazione vuoi revocare? Mandami il numero "
                             "(lo trovi in Assegnazioni)." + HINT)
     await cb.answer()
 
@@ -417,7 +420,7 @@ async def cb_revoca(cb: CallbackQuery, state: FSMContext):
 async def cb_admin_add(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="admin_add")
-    await cb.message.answer("Chi vuoi aggiungere come amministratore? Mandami ID, @username "
+    await cb.message.edit_text("Chi vuoi aggiungere come amministratore? Mandami ID, @username "
                             "o inoltra un suo messaggio." + HINT)
     await cb.answer()
 
@@ -426,7 +429,7 @@ async def cb_admin_add(cb: CallbackQuery, state: FSMContext):
 async def cb_admin_del(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="admin_del")
-    await cb.message.answer("Chi vuoi rimuovere dagli amministratori? Mandami ID, @username "
+    await cb.message.edit_text("Chi vuoi rimuovere dagli amministratori? Mandami ID, @username "
                             "o inoltra un suo messaggio." + HINT)
     await cb.answer()
 
@@ -743,6 +746,98 @@ async def cb_admins(cb: CallbackQuery):
     await cb.message.edit_text(f"Admin:\n\n{body}", reply_markup=kb.back())
     await cb.answer()
 
+PER_PAGE = 8
+
+
+@admin_router.callback_query(F.data == "a:noop")
+async def cb_noop(cb: CallbackQuery):
+    await cb.answer()
+
+
+async def _show_users_page(cb, page):
+    tot = await db.count_users()
+    righe = await db.all_users(page * PER_PAGE, PER_PAGE)
+    if not tot:
+        await cb.message.edit_text("Nessun utente registrato.", reply_markup=kb.back())
+        return
+    tastiera = []
+    for r in righe:
+        nome = (r["full_name"] or r["username"] or str(r["user_id"]))[:26]
+        stato = "🚫" if r["banned"] else "✅"
+        tastiera.append([
+            InlineKeyboardButton(text=f"{stato} {nome}", callback_data="a:noop"),
+            InlineKeyboardButton(
+                text=("Sblocca" if r["banned"] else "Banna"),
+                callback_data=f"lb:{'unban' if r['banned'] else 'ban'}:{r['user_id']}:{page}"),
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"a:allusers:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{(tot - 1) // PER_PAGE + 1}",
+                                    callback_data="a:noop"))
+    if (page + 1) * PER_PAGE < tot:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:allusers:{page + 1}"))
+    tastiera.append(nav)
+    tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    await cb.message.edit_text(f"Utenti registrati: {tot}",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
+
+
+@admin_router.callback_query(F.data.startswith("a:allusers"))
+async def cb_allusers(cb: CallbackQuery):
+    parti = cb.data.split(":")
+    page = int(parti[2]) if len(parti) > 2 else 0
+    await _show_users_page(cb, page)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("lb:"))
+async def cb_list_ban(cb: CallbackQuery):
+    _, azione, uid, page = cb.data.split(":")
+    uid = int(uid)
+    await db.ensure_user(uid)
+    if azione == "ban":
+        await db.ban(uid, "deciso da admin")
+        await db.log(cb.from_user.id, "ban", str(uid))
+    else:
+        await db.unban(uid)
+    await _show_users_page(cb, int(page))
+    await cb.answer("Bannato" if azione == "ban" else "Sbloccato")
+
+
+async def _show_admins(cb):
+    righe = await db.all_admins()
+    if not righe:
+        await cb.message.edit_text("Nessun admin aggiuntivo, solo i super-admin.",
+                                   reply_markup=kb.back())
+        return
+    tastiera = []
+    for r in righe:
+        nome = (r["username"] or str(r["user_id"]))[:24]
+        tastiera.append([
+            InlineKeyboardButton(text=f"🛡 {nome}", callback_data="a:noop"),
+            InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmadmin:{r['user_id']}"),
+        ])
+    tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    await cb.message.edit_text(f"Amministratori: {len(righe)}",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
+
+
+@admin_router.callback_query(F.data == "a:alladmins")
+async def cb_alladmins(cb: CallbackQuery):
+    await _show_admins(cb)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:rmadmin:"))
+async def cb_rmadmin(cb: CallbackQuery):
+    uid = int(cb.data.split(":")[2])
+    await db.del_admin(uid)
+    await db.clear_anon_by_user(uid)
+    await db.log(cb.from_user.id, "admin_del", str(uid))
+    await _show_admins(cb)
+    await cb.answer("Rimosso")
+
 
 # ==================== IMPOSTAZIONI ====================
 @admin_router.message(Command("cooldown"))
@@ -839,7 +934,7 @@ async def s_toggle(cb: CallbackQuery):
 async def s_cool(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="cooldown")
-    await cb.message.answer("Da quanti giorni vuoi che sia l'attesa tra una lista e l'altra?" + HINT)
+    await cb.message.edit_text("Da quanti giorni vuoi che sia l'attesa tra una lista e l'altra?" + HINT)
     await cb.answer()
 
 
@@ -847,7 +942,7 @@ async def s_cool(cb: CallbackQuery, state: FSMContext):
 async def s_group(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="setgroup")
-    await cb.message.answer("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
+    await cb.message.edit_text("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
                             "/setgroup dentro il gruppo." + HINT)
     await cb.answer()
 
@@ -856,28 +951,28 @@ async def s_group(cb: CallbackQuery, state: FSMContext):
 async def s_link(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="setlink")
-    await cb.message.answer("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT)
+    await cb.message.edit_text("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT)
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "s:wel")
 async def s_wel(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SetTxt.welcome)
-    await cb.message.answer("Invia il nuovo testo di benvenuto. Puoi usare {name} e {days}." + HINT)
+    await cb.message.edit_text("Invia il nuovo testo di benvenuto. Puoi usare {name} e {days}." + HINT)
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "s:deny")
 async def s_deny(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SetTxt.deny)
-    await cb.message.answer("Invia il nuovo testo di rifiuto. Puoi usare {when} e {left}." + HINT)
+    await cb.message.edit_text("Invia il nuovo testo di rifiuto. Puoi usare {when} e {left}." + HINT)
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "s:ntext")
 async def s_ntext(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SetTxt.not_member)
-    await cb.message.answer("Invia il nuovo testo di blocco. Puoi usare {link}." + HINT)
+    await cb.message.edit_text("Invia il nuovo testo di blocco. Puoi usare {link}." + HINT)
     await cb.answer()
 
 
