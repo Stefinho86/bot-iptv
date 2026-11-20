@@ -3,7 +3,7 @@ import json
 import uuid
 from pathlib import Path
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -33,6 +33,7 @@ class Add(StatesGroup):
 class SetTxt(StatesGroup):
     welcome = State()
     deny = State()
+    not_member = State()
 
 
 # ==================== UTENTE ====================
@@ -70,8 +71,10 @@ async def _welcome(msg):
 
 
 @user_router.message(Command("start"))
-async def start(msg: Message):
+async def start(msg: Message, bot: Bot):
     await db.touch_user(msg.from_user.id, msg.from_user.username, msg.from_user.full_name)
+    if not await db.is_admin(msg.from_user.id) and not await kb.member_ok(bot, msg.from_user.id):
+        return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
     if await db.is_admin(msg.from_user.id):
         await msg.answer("Pannello admin:", reply_markup=kb.admin_menu())
     await _welcome(msg)
@@ -90,30 +93,32 @@ async def mine(msg: Message):
 
 
 @user_router.callback_query(F.data == "u:get")
-async def cb_get(cb: CallbackQuery):
+async def cb_get(cb: CallbackQuery, bot: Bot):
     await cb.answer()
-    await deliver(cb.message, cb.from_user)
+    await deliver(cb.message, cb.from_user, bot)
 
 
 @user_router.message(Trigger(), Command("lista"))
-async def cmd_lista(msg: Message):
-    await deliver(msg, msg.from_user)
+async def cmd_lista(msg: Message, bot: Bot):
+    await deliver(msg, msg.from_user, bot)
 
 
 @user_router.message(Trigger(), F.text)
-async def mention_any(msg: Message):
-    await deliver(msg, msg.from_user)
+async def mention_any(msg: Message, bot: Bot):
+    await deliver(msg, msg.from_user, bot)
 
 
-async def deliver(msg, user):
+async def deliver(msg, user, bot):
     uid = user.id
     if await db.get_int("enabled") == 0:
         return await msg.answer("Bot momentaneamente spento.")
+    await db.touch_user(uid, user.username, user.full_name)
+    if not await db.is_admin(uid) and not await kb.member_ok(bot, uid):
+        return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
     if uid in BUSY:
         return await msg.answer("Sto gia preparando la tua lista, attendi.")
     BUSY.add(uid)
     try:
-        await db.touch_user(uid, user.username, user.full_name)
         u = await db.get_user(uid)
         if u and u["banned"]:
             return await msg.answer(f"Sei bannato. Motivo: {u['ban_reason'] or 'non indicato'}")
@@ -347,6 +352,15 @@ async def revoke(cb: CallbackQuery):
         await _hist(cb.message)
 
 
+@admin_router.message(Command("revoca"))
+async def revoca_cmd(msg: Message):
+    p = msg.text.split(maxsplit=1)
+    if len(p) < 2 or not p[1].isdigit():
+        return await msg.answer("Uso: /revoca IDASSEGNAZIONE")
+    row = await db.revoke(int(p[1]))
+    await msg.answer("Revocata." if row else "Non trovata.")
+
+
 @admin_router.message(Command("utenti"))
 async def users_cmd(msg: Message):
     parts = msg.text.split(maxsplit=1)
@@ -454,6 +468,15 @@ async def setgroup_cmd(msg: Message):
     await msg.answer("Gruppo impostato.")
 
 
+@admin_router.message(Command("setlink"))
+async def setlink_cmd(msg: Message):
+    p = msg.text.split(maxsplit=1)
+    if len(p) < 2:
+        return await msg.answer("Uso: /setlink https://t.me/+invito")
+    await db.set_setting("group_link", p[1].strip())
+    await msg.answer("Link del gruppo salvato.")
+
+
 @admin_router.message(Command("toggle"))
 async def toggle_cmd(msg: Message):
     cur = await db.get_int("enabled")
@@ -461,10 +484,14 @@ async def toggle_cmd(msg: Message):
     await msg.answer("Bot spento." if cur else "Bot attivo.")
 
 
+async def _settings_kb():
+    return kb.settings_kb(await db.get_int("cooldown_days"), await db.get_int("send_proof"),
+                          await db.get_int("enabled"), await db.get_int("group_only"))
+
+
 @admin_router.callback_query(F.data == "a:set")
 async def cb_set(cb: CallbackQuery):
-    await cb.message.edit_text("Impostazioni", reply_markup=kb.settings_kb(
-        await db.get_int("cooldown_days"), await db.get_int("send_proof"), await db.get_int("enabled")))
+    await cb.message.edit_text("Impostazioni", reply_markup=await _settings_kb())
     await cb.answer()
 
 
@@ -472,8 +499,15 @@ async def cb_set(cb: CallbackQuery):
 async def s_proof(cb: CallbackQuery):
     cur = await db.get_int("send_proof")
     await db.set_setting("send_proof", "0" if cur else "1")
-    await cb.message.edit_reply_markup(reply_markup=kb.settings_kb(
-        await db.get_int("cooldown_days"), 0 if cur else 1, await db.get_int("enabled")))
+    await cb.message.edit_reply_markup(reply_markup=await _settings_kb())
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "s:gonly")
+async def s_gonly(cb: CallbackQuery):
+    cur = await db.get_int("group_only")
+    await db.set_setting("group_only", "0" if cur else "1")
+    await cb.message.edit_reply_markup(reply_markup=await _settings_kb())
     await cb.answer()
 
 
@@ -481,8 +515,7 @@ async def s_proof(cb: CallbackQuery):
 async def s_toggle(cb: CallbackQuery):
     cur = await db.get_int("enabled")
     await db.set_setting("enabled", "0" if cur else "1")
-    await cb.message.edit_reply_markup(reply_markup=kb.settings_kb(
-        await db.get_int("cooldown_days"), await db.get_int("send_proof"), 0 if cur else 1))
+    await cb.message.edit_reply_markup(reply_markup=await _settings_kb())
     await cb.answer()
 
 
@@ -506,6 +539,13 @@ async def s_deny(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
+@admin_router.callback_query(F.data == "s:ntext")
+async def s_ntext(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(SetTxt.not_member)
+    await cb.message.answer("Invia il nuovo testo di blocco. Puoi usare {link} per il link del gruppo.")
+    await cb.answer()
+
+
 @admin_router.message(SetTxt.welcome)
 async def set_wel(msg: Message, state: FSMContext):
     await db.set_setting("welcome", msg.html_text)
@@ -516,6 +556,13 @@ async def set_wel(msg: Message, state: FSMContext):
 @admin_router.message(SetTxt.deny)
 async def set_deny(msg: Message, state: FSMContext):
     await db.set_setting("deny_text", msg.html_text)
+    await state.clear()
+    await msg.answer("Aggiornato.")
+
+
+@admin_router.message(SetTxt.not_member)
+async def set_ntext(msg: Message, state: FSMContext):
+    await db.set_setting("not_member", msg.html_text)
     await state.clear()
     await msg.answer("Aggiornato.")
 
