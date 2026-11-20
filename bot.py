@@ -114,8 +114,17 @@ async def _tcp_ok():
         return False
 
 
+def _mask(url):
+    if not url or "@" not in url:
+        return url
+    schema, resto = url.split("://", 1)
+    cred, host = resto.split("@", 1)
+    utente = cred.split(":")[0]
+    return f"{schema}://{utente}:***@{host}"
+
+
 async def _probe(proxy):
-    etichetta = f"proxy {proxy}" if proxy else "diretto"
+    etichetta = f"proxy {_mask(proxy)}" if proxy else "diretto"
     try:
         conn = make_connector(proxy)
         kw = {}
@@ -127,7 +136,10 @@ async def _probe(proxy):
                 print(f"PROVA {etichetta}: HTTP {r.status} {corpo[:100]}")
                 return r.status == 200
     except Exception as e:
-        print(f"PROVA {etichetta}: fallita ({type(e).__name__}: {e})")
+        testo = str(e)
+        if "407" in testo or "Proxy Authentication" in testo:
+            print("PROXY 407: richiede credenziali -> http://utente:password@IP:PORTA")
+        print(f"PROVA {etichetta}: fallita ({type(e).__name__})")
         return False
 
 
@@ -164,7 +176,7 @@ async def run_once():
     await db.init()
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
     if proxy:
-        print(f"Proxy configurato: {proxy}")
+        print(f"Proxy configurato: {_mask(proxy)}")
 
     print("Verifica via diretta")
     tcp = await _tcp_ok()
