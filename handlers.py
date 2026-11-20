@@ -504,9 +504,9 @@ async def _ask_confirm(target, state: FSMContext, item):
         await target.answer(text, reply_markup=kb.confirm(cid))
 
 
-@admin_router.message(Add.data, F.text | F.photo)
+@admin_router.message(Add.data, F.text)
 async def add_data(msg: Message, state: FSMContext):
-    text = msg.text or msg.caption or ""
+    text = msg.text or ""
     kind = (await state.get_data())["kind"]
     item = detect(text)
     if item and item["kind"] != kind:
@@ -524,6 +524,13 @@ async def add_data(msg: Message, state: FSMContext):
     if not item:
         return await msg.answer("Non ho riconosciuto i dati. Riprova o scrivi /annulla.")
     await _ask_confirm(msg, state, item)
+
+
+@admin_router.message(Add.data, F.photo)
+async def add_data_foto(msg: Message, state: FSMContext):
+    await msg.answer("Qui accetto solo testo o copia-incolla.\n"
+                     "Per una foto o un file usa /aggiungi e scegli «Aggiungi foto/txt».",
+                     reply_markup=kb.back())
 
 
 @admin_router.callback_query(F.data.startswith("a:ok:"))
@@ -548,7 +555,7 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
 
 
 # ---- import massivo da txt ----
-@admin_router.message(Add.bulk, F.document | F.text)
+@admin_router.message(Add.bulk, F.document | F.photo | F.text)
 async def bulk_input(msg: Message, state: FSMContext):
     testo = ""
     if msg.document:
@@ -559,7 +566,11 @@ async def bulk_input(msg: Message, state: FSMContext):
         await msg.bot.download(msg.document, destination=buf)
         testo = buf.getvalue().decode("utf-8", errors="ignore")
     else:
-        testo = msg.text or ""
+        testo = msg.text or msg.caption or ""
+
+    if not testo.strip():
+        return await msg.answer("Nella foto non c'è testo. Rimandala scrivendo le liste "
+                                "nella didascalia, oppure usa un file .txt.")
 
     items = detect_many(testo)
     if not items:
