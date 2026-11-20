@@ -46,7 +46,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="comandi", description="Elenco comandi"),
 ]
 
-TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
+TIMEOUT = aiohttp.ClientTimeout(total=15, connect=6)
 
 
 def make_connector(conn_proxy):
@@ -78,6 +78,14 @@ def nuova_sessione(proxy):
     return session
 
 
+def _mask(url):
+    if not url or "@" not in url:
+        return url
+    schema, resto = url.split("://", 1)
+    cred, host = resto.split("@", 1)
+    return f"{schema}://{cred.split(':')[0]}:***@{host}"
+
+
 async def _health(_):
     return web.Response(text="ok")
 
@@ -104,42 +112,29 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
-async def _tcp_ok():
+async def _tcp(host, port):
     try:
-        r, w = await asyncio.wait_for(asyncio.open_connection("149.154.167.220", 443), 6)
+        r, w = await asyncio.wait_for(asyncio.open_connection(host, port), 6)
         w.close()
         return True
     except Exception as e:
-        print(f"TCP diretto 149.154.167.220:443 fallito ({type(e).__name__})")
+        print(f"   TCP {host}:{port} -> {type(e).__name__}")
         return False
 
 
-def _mask(url):
-    if not url or "@" not in url:
-        return url
-    schema, resto = url.split("://", 1)
-    cred, host = resto.split("@", 1)
-    utente = cred.split(":")[0]
-    return f"{schema}://{utente}:***@{host}"
-
-
-async def _probe(proxy):
-    etichetta = f"proxy {_mask(proxy)}" if proxy else "diretto"
+async def _get(url, proxy=None, etichetta=""):
     try:
         conn = make_connector(proxy)
         kw = {}
         if proxy and not proxy.startswith("socks"):
             kw["proxy"] = proxy
         async with aiohttp.ClientSession(connector=conn, timeout=TIMEOUT) as s:
-            async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe", **kw) as r:
-                corpo = await r.text()
-                print(f"PROVA {etichetta}: HTTP {r.status} {corpo[:100]}")
-                return r.status == 200
+            async with s.get(url, **kw) as r:
+                corpo = (await r.text())[:90]
+                print(f"   {etichetta}: HTTP {r.status} {corpo}")
+                return r.status < 500
     except Exception as e:
-        testo = str(e)
-        if "407" in testo or "Proxy Authentication" in testo:
-            print("PROXY 407: richiede credenziali -> http://utente:password@IP:PORTA")
-        print(f"PROVA {etichetta}: fallita ({type(e).__name__})")
+        print(f"   {etichetta}: {type(e).__name__}")
         return False
 
 
@@ -157,45 +152,53 @@ async def _attendi_rete(bot) -> bool:
 
 async def _registra_comandi(bot):
     await asyncio.sleep(8)
-    for tentativo in range(1, 4):
+    for tentativo in range(1, 3):
         try:
             await bot.set_my_commands(USER_CMDS, scope=BotCommandScopeDefault())
             for uid in config.SUPER_ADMINS:
                 try:
                     await bot.set_my_commands(ADMIN_CMDS, scope=BotCommandScopeChat(chat_id=uid))
-                except Exception as e:
-                    print(f"Comandi admin per {uid}: {type(e).__name__}")
+                except Exception:
+                    pass
             print("Comandi registrati")
             return
         except Exception as e:
-            print(f"Registrazione comandi fallita ({type(e).__name__}), tentativo {tentativo}/3")
-            await asyncio.sleep(15 * tentativo)
+            print(f"Comandi non registrati ({type(e).__name__})")
+            await asyncio.sleep(15)
 
 
 async def run_once():
     await db.init()
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
-    if proxy:
-        print(f"Proxy configurato: {_mask(proxy)}")
+    api = f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe"
 
-    print("Verifica via diretta")
-    tcp = await _tcp_ok()
-    diretto = await _probe(None) if tcp else False
+    print("--- TEST A: uscita internet generica ---")
+    ipa = await _tcp("1.1.1.1", 443)
+    weba = await _get("https://api.ipify.org", None, "ipify diretto") if ipa else False
 
-    via_proxy = False
-    if proxy and not diretto:
-        via_proxy = await _probe(proxy)
+    print("--- TEST B: Telegram diretto ---")
+    telegram = await _get(api, None, "telegram diretto") if ipa else False
 
-    if not diretto and not via_proxy:
-        print("=== NESSUNA VIA VERSO TELEGRAM ===")
-        if not proxy:
-            print("Imposta PROXY_URL con un proxy http:// funzionante")
-        else:
-            print("Il proxy configurato non funziona: cambialo")
+    prox = False
+    if proxy and not telegram:
+        print(f"--- TEST C: proxy {_mask(proxy)} ---")
+        prox = await _get(api, proxy, "telegram via proxy")
+
+    if not weba and not telegram:
+        print("=== VERDETTO: USCITA INTERNET ASSENTE ===")
+        print("Il container non raggiunge nessun host esterno: non e' Telegram.")
+        print("Riprova: Settings -> Restart, oppure cambia regione.")
         await db.close()
         return
 
+    if not telegram and not prox:
+        print("=== VERDETTO: TELEGRAM BLOCCATO, PROXY INUTILIZZABILE ===")
+        await db.close()
+        return
+
+    via_proxy = prox and not telegram
     print("Via scelta: " + ("proxy" if via_proxy else "diretta"))
+
     session = nuova_sessione(proxy if via_proxy else None)
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -209,15 +212,14 @@ async def run_once():
         return
 
     dp = build_dispatcher()
-
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
         print(f"delete_webhook saltato: {type(e).__name__}")
 
     asyncio.create_task(_registra_comandi(bot))
-
     print("POLLING ATTIVO")
+
     try:
         await dp.start_polling(bot)
     finally:
