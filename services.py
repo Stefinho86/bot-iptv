@@ -9,8 +9,14 @@ def ocr_bytes(data):
     w, h = img.size
     if w < 1600:
         img = img.resize((w * 2, h * 2), Image.LANCZOS)
+    if sum(img.getdata()) / (w * h) < 110:
+        img = ImageOps.invert(img)
     img = ImageOps.autocontrast(img)
-    return pytesseract.image_to_string(img, lang="eng", config="--psm 6")
+    for psm in ("4", "6"):
+        out = pytesseract.image_to_string(img, lang="eng", config=f"--oem 3 --psm {psm}")
+        if out.strip():
+            return out
+    return ""
       
 import asyncio
 import json
