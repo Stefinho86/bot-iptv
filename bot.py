@@ -46,6 +46,13 @@ ADMIN_CMDS = USER_CMDS + [
 ]
 
 
+def make_connector(proxy):
+    if proxy and proxy.startswith("socks"):
+        from aiohttp_socks import ProxyConnector
+        return ProxyConnector.from_url(proxy, ssl=ssl.create_default_context())
+    return aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl.create_default_context())
+
+
 class SafeSession(AiohttpSession):
     def __init__(self, timeout=None, proxy=None):
         if timeout is None:
@@ -55,7 +62,7 @@ class SafeSession(AiohttpSession):
         self.proxy = proxy
 
     async def create_connector(self, *args, **kwargs):
-        return aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl.create_default_context())
+        return make_connector(self.proxy)
 
 
 async def _health(_):
@@ -84,29 +91,24 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
-async def _diag():
+async def _diag(proxy):
     try:
         a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET)]
         print(f"DNS IPv4: {a[:3]}")
     except Exception as e:
         print(f"DNS IPv4 fallito: {repr(e)}")
     try:
-        a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET6)]
-        print(f"DNS IPv6: {a[:2]}")
-    except Exception as e:
-        print(f"DNS IPv6 assente: {type(e).__name__}")
-    try:
-        conn = aiohttp.TCPConnector(family=socket.AF_INET)
+        conn = make_connector(proxy)
         async with aiohttp.ClientSession(
-                connector=conn, timeout=aiohttp.ClientTimeout(total=15)) as s:
+                connector=conn, timeout=aiohttp.ClientTimeout(total=20)) as s:
             async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe") as r:
                 print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
     except Exception as e:
         print(f"GET getMe fallita: {repr(e)}")
 
 
-async def _attendi_rete(bot) -> bool:
-    await _diag()
+async def _attendi_rete(bot, proxy) -> bool:
+    await _diag(proxy)
     for i in range(1, 11):
         try:
             me = await bot.me()
@@ -141,14 +143,20 @@ async def run_once():
     await db.init()
 
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
-    session = SafeSession(timeout=aiohttp.ClientTimeout(total=60, connect=20), proxy=proxy)
+    if proxy:
+        print(f"Proxy configurato: {proxy}")
+
+    try:
+        session = SafeSession(timeout=aiohttp.ClientTimeout(total=60, connect=20), proxy=proxy)
+    except Exception as e:
+        print(f"Proxy non utilizzabile ({type(e).__name__}), proseguo diretto")
+        proxy = None
+        session = SafeSession(timeout=aiohttp.ClientTimeout(total=60, connect=20))
+
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
-    if proxy:
-        print("Proxy attivo")
-
-    if not await _attendi_rete(bot):
+    if not await _attendi_rete(bot, proxy):
         try:
             await bot.session.close()
         except Exception:
