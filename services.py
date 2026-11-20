@@ -182,31 +182,44 @@ async def _test_m3u(session, p):
             return Result(True, "ok", f, f"{len(urls)} canali")
     return Result(False, "nessuno stream riproducibile")
 
-
+def _pwd_varianti(pwd):
+    v = [pwd]
+    for a, b in (("0", "o"), ("o", "0"), ("1", "l"), ("l", "1"), ("O", "0"), ("S", "5")):
+        x = pwd.replace(a, b)
+        if x != pwd and x not in v:
+            v.append(x)
+    return v
+    
 async def _test_xtream(session, p: dict) -> Result:
-    q = f"username={p['username']}&password={p['password']}"
-    j = None
-    base = p["server"]
     ultimo = "host non raggiungibile"
+    buono = None
     for srv in [p["server"], *(p.get("alts") or [])]:
-        st, body = await _get(session, f"{srv}/player_api.php?{q}")
-        if st >= 400:
-            ultimo = f"HTTP {st} su {srv}"
-            continue
-        try:
-            j = json.loads(body)
-        except Exception:
-            ultimo = f"risposta non valida da {srv}"
-            continue
-        base = srv
-        break
-    if j is None:
-        return Result(False, ultimo)    
-    ui = j.get("user_info") or {}
-    if ui.get("auth") in (0, False):
-        return Result(False, "credenziali rifiutate")
-    if str(ui.get("status", "")).lower() not in ("active", "1", "true"):
-        return Result(False, f"stato {ui.get('status')}")
+        for pwd in _pwd_varianti(p["password"]):
+            q = f"username={p['username']}&password={pwd}"
+            st, body = await _get(session, f"{srv}/player_api.php?{q}")
+            if st >= 400:
+                ultimo = f"HTTP {st} su {srv}"
+                continue
+            try:
+                j = json.loads(body)
+            except Exception:
+                ultimo = f"risposta non valida da {srv}"
+                continue
+            ui = j.get("user_info") or {}
+            if ui.get("auth") in (0, False):
+                ultimo = "credenziali rifiutate"
+                continue
+            if str(ui.get("status", "")).lower() not in ("active", "1", "true"):
+                ultimo = f"stato {ui.get('status')}"
+                continue
+            buono = (srv, pwd, ui)
+            break
+        if buono:
+            break
+    if not buono:
+        return Result(False, ultimo)
+    base, p["password"], ui = buono
+    q = f"username={p['username']}&password={p['password']}"
     info = f"scadenza {ui.get('exp_date') or '-'}"
     st, body = await _get(session, f"{base}/player_api.php?{q}&action=get_live_streams", timeout=30)
     try:
@@ -279,13 +292,10 @@ def detect_many(text):
         items.append(it)
 
     srv_host = None
-    srv_pat = (r"(?:^|\n)[^\w\n]{0,4}\s*server\s*:\s*(?:https?://)?"
-               r"([a-z0-9.\-]+\.[a-z]{2,})(?::(\d{2,5}))?")
-    if len(re.findall(srv_pat, text, re.I)) == 1:
-        m2 = re.search(srv_pat, text, re.I)
-        if m2:
-            srv_host = (m2.group(1), m2.group(2))
-
+    m2 = re.search(r"server\s*:\s*(?:https?://)?([a-z0-9.\-]+\.[a-z]{2,})(?::(\d{2,5}))?",
+                   text, re.I)
+    if m2:
+        srv_host = (m2.group(1), m2.group(2))
     for m in GETPHP.finditer(text):
         raw = m.group(0)
         server = _base(raw)
