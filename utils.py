@@ -111,6 +111,7 @@ def admin_menu():
         [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist")],
         [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
         [B(text="📇 Elenco utenti", callback_data="a:allusers"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
+        [B(text="🚫 Utenti bannati", callback_data="a:banned")],
         [B(text="➕ Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
         [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
