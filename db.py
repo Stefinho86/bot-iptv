@@ -296,16 +296,33 @@ async def ensure_user(uid):
         await c.execute("INSERT INTO users(user_id,first_seen) VALUES($1,$2) "
                         "ON CONFLICT(user_id) DO NOTHING", uid, now())
 
-async def all_users(offset, limit):
+async def all_users(offset, limit, escludi):
     async with _pool.acquire() as c:
         return await c.fetch(
             "SELECT user_id, username, full_name, banned FROM users "
-            "ORDER BY first_seen DESC OFFSET $1 LIMIT $2", offset, limit)
+            "WHERE user_id <> ALL($3::bigint[]) "
+            "AND user_id NOT IN (SELECT user_id FROM admins) "
+            "ORDER BY first_seen DESC OFFSET $1 LIMIT $2",
+            offset, limit, list(escludi))
 
 
-async def count_users():
+async def count_users(escludi):
     async with _pool.acquire() as c:
-        return await c.fetchval("SELECT COUNT(*) FROM users")
+        return await c.fetchval(
+            "SELECT COUNT(*) FROM users WHERE user_id <> ALL($1::bigint[]) "
+            "AND user_id NOT IN (SELECT user_id FROM admins)", list(escludi))
+
+
+async def banned_users(offset, limit):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT user_id, username, full_name, ban_reason FROM users "
+            "WHERE banned = TRUE ORDER BY first_seen DESC OFFSET $1 LIMIT $2", offset, limit)
+
+
+async def count_banned():
+    async with _pool.acquire() as c:
+        return await c.fetchval("SELECT COUNT(*) FROM users WHERE banned = TRUE")
 
 
 async def all_admins():
