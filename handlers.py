@@ -1430,12 +1430,19 @@ async def ask_input(msg: Message, state: FSMContext):
         await state.clear()
         return await _del_by(msg, raw)
       
+    if action == "admin_add":
+        await state.clear()
+        return await _add_by(msg, raw)
+    if action == "admin_del":
+        await state.clear()
+        return await _del_by(msg, raw)
+
     uid = await _target(msg, raw)
     if not uid:
         return await _need_target(msg)
     await db.ensure_user(uid)
-  
-    elif action == "ban":
+
+    if action == "ban":
         await db.ban(uid, "deciso da admin")
         await db.log(msg.from_user.id, "ban", str(uid))
         testo = f"Utente {uid} bannato."
