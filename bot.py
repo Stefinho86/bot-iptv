@@ -22,6 +22,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="aggiungi", description="Aggiungi lista"),
     BotCommand(command="liberi", description="Liste libere"),
     BotCommand(command="assegnazioni", description="Storico assegnazioni"),
+    BotCommand(command="revoca", description="Revoca un'assegnazione"),
     BotCommand(command="utenti", description="Cerca utente"),
     BotCommand(command="ban", description="Banna utente"),
     BotCommand(command="unban", description="Sblocca utente"),
@@ -30,6 +31,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin_del", description="Rimuovi admin"),
     BotCommand(command="cooldown", description="Imposta giorni"),
     BotCommand(command="setgroup", description="Imposta gruppo"),
+    BotCommand(command="setlink", description="Imposta link gruppo"),
     BotCommand(command="toggle", description="Accendi/spegni"),
     BotCommand(command="esporta", description="Esporta liste libere"),
 ]
