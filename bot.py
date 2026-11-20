@@ -19,6 +19,7 @@ USER_CMDS = [
 ]
 ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin", description="Pannello admin"),
+    BotCommand(command="stato", description="Diagnostica"),
     BotCommand(command="comandi", description="Elenco comandi"),
     BotCommand(command="aggiungi", description="Aggiungi lista"),
     BotCommand(command="liberi", description="Liste libere"),
@@ -34,6 +35,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="setgroup", description="Imposta gruppo"),
     BotCommand(command="setlink", description="Imposta link gruppo"),
     BotCommand(command="verifica", description="Riverifica admin anonimo"),
+    BotCommand(command="deverifica", description="Revoca verifica anonimo"),
     BotCommand(command="toggle", description="Accendi/spegni"),
     BotCommand(command="esporta", description="Esporta liste libere"),
 ]
