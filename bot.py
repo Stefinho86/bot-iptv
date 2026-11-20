@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import socket
 import time
 
 import aiohttp
@@ -69,7 +70,27 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
+async def _diag():
+    try:
+        a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET)]
+        print(f"DNS IPv4: {a[:3]}")
+    except Exception as e:
+        print(f"DNS IPv4 fallito: {repr(e)}")
+    try:
+        a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET6)]
+        print(f"DNS IPv6: {a[:2]}")
+    except Exception as e:
+        print(f"DNS IPv6 assente: {type(e).__name__}")
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+            async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe") as r:
+                print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
+    except Exception as e:
+        print(f"GET getMe fallita: {repr(e)}")
+
+
 async def _attendi_rete(bot) -> bool:
+    await _diag()
     for i in range(1, 11):
         try:
             me = await bot.me()
@@ -78,7 +99,7 @@ async def _attendi_rete(bot) -> bool:
         except Exception as e:
             print(f"Telegram non raggiungibile ({type(e).__name__}), tentativo {i}/10")
             await asyncio.sleep(6)
-    print("RETE BLOCCATA: api.telegram.org non risponde. Cambia regione del servizio.")
+    print("RETE BLOCCATA: api.telegram.org non risponde.")
     return False
 
 
@@ -105,9 +126,17 @@ async def main():
     await db.init()
     await start_health()
 
-    session = AiohttpSession(timeout=aiohttp.ClientTimeout(total=90, connect=30))
+    proxy = (os.getenv("PROXY_URL") or "").strip() or None
+    session = AiohttpSession(
+        timeout=aiohttp.ClientTimeout(total=60, connect=20),
+        family=socket.AF_INET,
+        proxy=proxy,
+    )
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+    if proxy:
+        print("Proxy attivo")
 
     if not await _attendi_rete(bot):
         try:
