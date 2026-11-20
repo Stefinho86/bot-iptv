@@ -1,10 +1,31 @@
 import io
+import shutil
+import subprocess
 
 import pytesseract
 from PIL import Image, ImageOps
 
+_INSTALLATO = False
+
+
+def _ensure_tesseract():
+    global _INSTALLATO
+    if _INSTALLATO:
+        return
+    _INSTALLATO = True
+    if shutil.which("tesseract"):
+        return
+    print("tesseract assente, provo a installarlo")
+    try:
+        subprocess.run(["apt-get", "update", "-qq"], timeout=180)
+        subprocess.run(["apt-get", "install", "-y", "-qq",
+                        "tesseract-ocr", "tesseract-ocr-eng"], timeout=300)
+    except Exception as e:
+        print("installazione tesseract fallita:", e)
+    print("tesseract:", shutil.which("tesseract"))
 
 def ocr_bytes(data):
+    _ensure_tesseract()
     img = Image.open(io.BytesIO(data)).convert("L")
     w, h = img.size
     if w < 1600:
