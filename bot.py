@@ -3,8 +3,10 @@ import logging
 import os
 import time
 
+import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 from aiohttp import web
@@ -57,9 +59,32 @@ async def start_health():
     await web.TCPSite(runner, "0.0.0.0", int(port)).start()
 
 
+def build_dispatcher() -> Dispatcher:
+    for r in (admin_router, anon_router, user_router):
+        r.parent_router = None
+    dp = Dispatcher()
+    dp.include_router(admin_router)
+    dp.include_router(anon_router)
+    dp.include_router(user_router)
+    return dp
+
+
+async def _attendi_rete(bot) -> bool:
+    for i in range(1, 11):
+        try:
+            me = await bot.me()
+            print(f"Avviato come @{me.username}")
+            return True
+        except Exception as e:
+            print(f"Telegram non raggiungibile ({type(e).__name__}), tentativo {i}/10")
+            await asyncio.sleep(6)
+    print("RETE BLOCCATA: api.telegram.org non risponde. Cambia regione del servizio.")
+    return False
+
+
 async def _registra_comandi(bot):
     await asyncio.sleep(8)
-    for tentativo in range(1, 6):
+    for tentativo in range(1, 4):
         try:
             await bot.set_my_commands(USER_CMDS, scope=BotCommandScopeDefault())
             for uid in config.SUPER_ADMINS:
@@ -70,9 +95,9 @@ async def _registra_comandi(bot):
             print("Comandi registrati")
             return
         except Exception as e:
-            print(f"Registrazione comandi fallita ({type(e).__name__}), tentativo {tentativo}/5")
+            print(f"Registrazione comandi fallita ({type(e).__name__}), tentativo {tentativo}/3")
             await asyncio.sleep(20 * tentativo)
-    print("Comandi non registrati: impostali con /setcommands su BotFather")
+    print("Comandi non registrati, usa /setcommands su BotFather")
 
 
 async def main():
@@ -80,22 +105,24 @@ async def main():
     await db.init()
     await start_health()
 
-    bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
-    dp.include_router(admin_router)
-    dp.include_router(anon_router)
-    dp.include_router(user_router)
+    session = AiohttpSession(timeout=aiohttp.ClientTimeout(total=90, connect=30))
+    bot = Bot(config.BOT_TOKEN, session=session,
+              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+    if not await _attendi_rete(bot):
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+        await db.close()
+        return
+
+    dp = build_dispatcher()
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
         print(f"delete_webhook saltato: {type(e).__name__}")
-
-    try:
-        me = await bot.me()
-        print(f"Avviato come @{me.username}")
-    except Exception as e:
-        print(f"Avviato (username non recuperato: {type(e).__name__})")
 
     asyncio.create_task(_registra_comandi(bot))
 
@@ -115,5 +142,5 @@ if __name__ == "__main__":
             asyncio.run(main())
         except Exception as e:
             print(f"Crash: {type(e).__name__}: {e}")
-        print("Riavvio interno tra 10 secondi")
-        time.sleep(10)
+        print("Riavvio interno tra 15 secondi")
+        time.sleep(15)
