@@ -328,3 +328,25 @@ async def count_banned():
 async def all_admins():
     async with _pool.acquire() as c:
         return await c.fetch("SELECT user_id, username FROM admins ORDER BY added_at")
+
+async def get_list(lid):
+    async with _pool.acquire() as c:
+        return await c.fetchrow("SELECT * FROM lists WHERE id=$1", lid)
+
+
+async def free_lists_kind(kind, offset, limit):
+    async with _pool.acquire() as c:
+        if kind:
+            return await c.fetch(
+                "SELECT * FROM lists WHERE status='free' AND kind=$1 "
+                "ORDER BY id DESC OFFSET $2 LIMIT $3", kind, offset, limit)
+        return await c.fetch(
+            "SELECT * FROM lists WHERE status='free' ORDER BY id DESC OFFSET $1 LIMIT $2",
+            offset, limit)
+
+
+async def count_free_kind(kind):
+    async with _pool.acquire() as c:
+        if kind:
+            return await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free' AND kind=$1", kind)
+        return await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free'")
