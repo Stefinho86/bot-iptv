@@ -561,8 +561,10 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
 def _bulk_line(n, it):
     p = it["payload"]
     if it["kind"] == "xtream":
-        return (f"{n}. <b>XT</b> <code>{p['username']}</code> : "
-                f"<code>{p['password']}</code> · <code>{p['server']}</code>")
+        return (f"{n}. <b>XT</b>\n"
+                f"user: <code>{p['username']}</code>\n"
+                f"pass: <code>{p['password']}</code>\n"
+                f"<code>{p['server']}</code>")
     if it["kind"] == "stalker":
         return f"{n}. <b>ST</b> <code>{p['mac']}</code> · <code>{p['portal']}</code>"
     return f"{n}. <b>M3U</b> <code>{p['url'][:80]}</code>"
