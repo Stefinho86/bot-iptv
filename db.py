@@ -37,6 +37,7 @@ DEFAULTS = {
     "enabled": "1",
     "send_proof": "1",
     "max_attempts": "6",
+    "anon_ttl_min": "120",
     "group_id": "0",
     "group_only": "1",
     "group_link": "",
