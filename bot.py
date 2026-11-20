@@ -47,18 +47,33 @@ ADMIN_CMDS = USER_CMDS + [
 ]
 
 
-def make_connector(proxy):
-    if proxy and proxy.startswith("socks"):
+def make_connector(conn_proxy):
+    if conn_proxy and conn_proxy.startswith("socks"):
         from aiohttp_socks import ProxyConnector
-        return ProxyConnector.from_url(proxy, ssl=ssl.create_default_context())
+        return ProxyConnector.from_url(conn_proxy, ssl=ssl.create_default_context())
     return aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl.create_default_context())
 
 
 async def _create_connector(self, *args, **kwargs):
-    return make_connector(getattr(self, "_proxy_url", None))
+    return make_connector(getattr(self, "_conn_proxy", None))
 
 
 AiohttpSession.create_connector = _create_connector
+AiohttpSession.proxy = property(
+    lambda self: getattr(self, "_req_proxy", None),
+    lambda self, v: setattr(self, "_req_proxy", v),
+)
+
+
+def nuova_sessione(proxy):
+    session = AiohttpSession()
+    if proxy and proxy.startswith("socks"):
+        session._conn_proxy = proxy
+        session.proxy = None
+    else:
+        session._conn_proxy = None
+        session.proxy = proxy
+    return session
 
 
 async def _health(_):
@@ -87,17 +102,6 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
-def nuova_sessione(proxy):
-    session = AiohttpSession()
-    for nome, valore in (("_proxy_url", proxy),
-                         ("proxy", None if (proxy and proxy.startswith("socks")) else proxy)):
-        try:
-            setattr(session, nome, valore)
-        except Exception as e:
-            print(f"Attributo {nome} non impostato ({type(e).__name__}), proseguo")
-    return session
-
-
 async def _diag(proxy):
     try:
         a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET)]
@@ -113,8 +117,12 @@ async def _diag(proxy):
                 connector=conn, timeout=aiohttp.ClientTimeout(total=20), **kw) as s:
             async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe") as r:
                 print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
+                return True
     except Exception as e:
         print(f"GET getMe fallita: {repr(e)}")
+    if not proxy:
+        print("SENZA PROXY NON PASSA: imposta PROXY_URL (http://IP:PORTA)")
+    return False
 
 
 async def _attendi_rete(bot, proxy) -> bool:
@@ -155,12 +163,7 @@ async def run_once():
 
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
     print(f"PASSO 2: sessione (proxy={'si' if proxy else 'no'})")
-    try:
-        session = nuova_sessione(proxy)
-    except Exception as e:
-        print(f"Sessione con proxy fallita ({type(e).__name__}: {e}), uso la standard")
-        proxy = None
-        session = AiohttpSession()
+    session = nuova_sessione(proxy)
 
     print("PASSO 3: bot")
     bot = Bot(config.BOT_TOKEN, session=session,
