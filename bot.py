@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -20,7 +21,6 @@ USER_CMDS = [
 ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin", description="Pannello admin"),
     BotCommand(command="stato", description="Diagnostica"),
-    BotCommand(command="comandi", description="Elenco comandi"),
     BotCommand(command="aggiungi", description="Aggiungi lista"),
     BotCommand(command="liberi", description="Liste libere"),
     BotCommand(command="assegnazioni", description="Storico assegnazioni"),
@@ -34,10 +34,11 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="cooldown", description="Imposta giorni"),
     BotCommand(command="setgroup", description="Imposta gruppo"),
     BotCommand(command="setlink", description="Imposta link gruppo"),
-    BotCommand(command="verifica", description="Riverifica admin anonimo"),
-    BotCommand(command="deverifica", description="Revoca verifica anonimo"),
-    BotCommand(command="toggle", description="Accendi/spegni"),
+    BotCommand(command="verifica", description="Riverifica admin"),
+    BotCommand(command="deverifica", description="Revoca verifica"),
+    BotCommand(command="toggle", description="Accendi o spegni"),
     BotCommand(command="esporta", description="Esporta liste libere"),
+    BotCommand(command="comandi", description="Elenco comandi"),
 ]
 
 
@@ -56,6 +57,24 @@ async def start_health():
     await web.TCPSite(runner, "0.0.0.0", int(port)).start()
 
 
+async def _registra_comandi(bot):
+    await asyncio.sleep(8)
+    for tentativo in range(1, 6):
+        try:
+            await bot.set_my_commands(USER_CMDS, scope=BotCommandScopeDefault())
+            for uid in config.SUPER_ADMINS:
+                try:
+                    await bot.set_my_commands(ADMIN_CMDS, scope=BotCommandScopeChat(chat_id=uid))
+                except Exception as e:
+                    print(f"Comandi admin per {uid}: {type(e).__name__}")
+            print("Comandi registrati")
+            return
+        except Exception as e:
+            print(f"Registrazione comandi fallita ({type(e).__name__}), tentativo {tentativo}/5")
+            await asyncio.sleep(20 * tentativo)
+    print("Comandi non registrati: impostali con /setcommands su BotFather")
+
+
 async def main():
     logging.basicConfig(level=logging.INFO)
     await db.init()
@@ -67,20 +86,34 @@ async def main():
     dp.include_router(anon_router)
     dp.include_router(user_router)
 
-    await bot.set_my_commands(USER_CMDS, scope=BotCommandScopeDefault())
-    for uid in config.SUPER_ADMINS:
-        try:
-            await bot.set_my_commands(ADMIN_CMDS, scope=BotCommandScopeChat(chat_id=uid))
-        except Exception:
-            pass
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"delete_webhook saltato: {type(e).__name__}")
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    print(f"Avviato come @{(await bot.me()).username}")
+    try:
+        me = await bot.me()
+        print(f"Avviato come @{me.username}")
+    except Exception as e:
+        print(f"Avviato (username non recuperato: {type(e).__name__})")
+
+    asyncio.create_task(_registra_comandi(bot))
+
     try:
         await dp.start_polling(bot)
     finally:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
         await db.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    while True:
+        try:
+            asyncio.run(main())
+        except Exception as e:
+            print(f"Crash: {type(e).__name__}: {e}")
+        print("Riavvio interno tra 10 secondi")
+        time.sleep(10)
