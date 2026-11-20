@@ -271,19 +271,20 @@ def detect_many(text):
 
     def add(it):
         p = it["payload"]
-        key = it["kind"] + "|" + "|".join(str(p.get(k, "")) for k in ("server", "url", "portal", "username", "password"))
+        key = it["kind"] + "|" + "|".join(
+            str(p.get(k, "")) for k in ("server", "url", "portal", "username", "password"))
         if key in seen:
             return
         seen.add(key)
         items.append(it)
-        
-srv_host = None
+
+    srv_host = None
     if len(re.findall(r"(?:^|\n)\s*server\s*:", text, re.I)) == 1:
         m2 = re.search(r"(?:^|\n)\s*server\s*:\s*(?:https?://)?([a-z0-9.\-]+\.[a-z]{2,})"
                        r"(?::(\d{2,5}))?", text, re.I)
         if m2:
             srv_host = (m2.group(1), m2.group(2))
-    
+
     for m in GETPHP.finditer(text):
         raw = m.group(0)
         server = _base(raw)
@@ -291,8 +292,10 @@ srv_host = None
         net = re.match(r"(https?://)([^/\s]+)", raw)
         if net:
             scheme, netloc = net.group(1), net.group(2)
-            host, port = (netloc.rpartition(":")[0], netloc.rpartition(":")[2]) \
-                if ":" in netloc else (netloc, "")
+            if ":" in netloc:
+                host, port = netloc.rpartition(":")[0], netloc.rpartition(":")[2]
+            else:
+                host, port = netloc, ""
             host = host.rsplit("@", 1)[-1]
             if srv_host:
                 srv = f"{scheme}{srv_host[0]}:{srv_host[1] or port or 80}"
@@ -313,7 +316,8 @@ srv_host = None
         if low.endswith((".m3u", ".m3u8")):
             add({"kind": "m3u", "label": _base(u), "payload": {"url": u}})
         elif "/c/" in low or "portal.php" in low:
-            add({"kind": "stalker", "label": _base(u), "payload": {"portal": _base(u), "mac": ""}})
+            add({"kind": "stalker", "label": _base(u),
+                 "payload": {"portal": _base(u), "mac": ""}})
 
     macs = [m.group(0).upper() for m in MAC.finditer(text)]
     for it in items:
