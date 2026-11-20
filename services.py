@@ -8,24 +8,29 @@ from PIL import Image, ImageOps
 _INSTALLATO = False
 
 
-def _ensure_tesseract():
-    global _INSTALLATO
-    if _INSTALLATO:
+_BINS_OK = False
+
+
+def _ensure_bins():
+    global _BINS_OK
+    if _BINS_OK:
         return
-    _INSTALLATO = True
-    if shutil.which("tesseract"):
+    _BINS_OK = True
+    manca = [p for p in ("tesseract", "ffmpeg") if not shutil.which(p)]
+    if not manca:
         return
-    print("tesseract assente, provo a installarlo")
+    pacchetti = [{"tesseract": "tesseract-ocr", "ffmpeg": "ffmpeg"}[p] for p in manca]
+    print("mancano:", manca)
     try:
         subprocess.run(["apt-get", "update", "-qq"], timeout=180)
-        subprocess.run(["apt-get", "install", "-y", "-qq",
-                        "tesseract-ocr", "tesseract-ocr-eng"], timeout=300)
+        subprocess.run(["apt-get", "install", "-y", "-qq", *pacchetti,
+                        "tesseract-ocr-eng"], timeout=420)
     except Exception as e:
-        print("installazione tesseract fallita:", e)
-    print("tesseract:", shutil.which("tesseract"))
+        print("installazione fallita:", e)
+    print("ffmpeg:", shutil.which("ffmpeg"), "tesseract:", shutil.which("tesseract"))
 
 def ocr_bytes(data):
-    _ensure_tesseract()
+    _ensure_bins()
     img = Image.open(io.BytesIO(data)).convert("L")
     w, h = img.size
     if w < 2200:
@@ -273,6 +278,7 @@ async def _test_stalker(session, p):
 
 async def test_list(kind, payload):
     try:
+        _ensure_bins()
         async with aiohttp.ClientSession() as s:
             if kind == "xtream":
                 return await _test_xtream(s, payload)
