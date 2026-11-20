@@ -997,22 +997,48 @@ async def reset_cmd(msg: Message, state: FSMContext):
 
 
 # ==================== AMMINISTRATORI ====================
+async def _add_by(msg, raw):
+    uid = await resolve_uid(msg.bot, raw)
+    nome = raw.strip().lstrip("@").strip()
+    if uid:
+        await db.add_admin(uid, nome or None, msg.from_user.id)
+        await db.log(msg.from_user.id, "admin_add", str(uid))
+        return await msg.answer(f"{uid} ora è amministratore.", reply_markup=kb.back())
+    if not nome or " " in nome:
+        return await _need_target(msg)
+    await db.add_admin_name(nome, msg.from_user.id)
+    await db.log(msg.from_user.id, "admin_add_name", nome)
+    await msg.answer(f"@{nome} ora è amministratore, senza bisogno di ID.\n\n"
+                     f"Funziona appena scrive al bot o nel gruppo. "
+                     f"Se cambia username va riaggiunto.", reply_markup=kb.back())
+
+
+async def _del_by(msg, raw):
+    uid = await resolve_uid(msg.bot, raw)
+    nome = raw.strip().lstrip("@").strip()
+    fatto = False
+    if uid:
+        await db.del_admin(uid)
+        fatto = True
+    if nome and " " not in nome:
+        await db.del_admin_name(nome)
+        fatto = True
+    if not fatto:
+        return await _need_target(msg)
+    await db.log(msg.from_user.id, "admin_del", str(uid or nome))
+    await msg.answer(f"{uid or '@' + nome} non è più amministratore.", reply_markup=kb.back())
+  
 @admin_router.message(Command("admin_add"))
 async def admin_add(msg: Message, state: FSMContext):
     await state.clear()
     p = msg.text.split(maxsplit=1)
     if len(p) > 1:
-        uid = await resolve_uid(msg.bot, p[1])
-        if not uid:
-            return await _need_target(msg)
-        await db.add_admin(uid, None, msg.from_user.id)
-        await db.log(msg.from_user.id, "admin_add", str(uid))
-        return await msg.answer(f"{uid} ora è amministratore.", reply_markup=kb.back())
+        return await _add_by(msg, p[1])
     await state.set_state(Ask.wait)
     await state.update_data(action="admin_add")
     await msg.answer("Chi vuoi aggiungere come amministratore?\n\n"
-                     "Inoltra qui un suo messaggio: è il modo che funziona sempre.\n"
-                     "Se non puoi, mandami il suo ID numerico." + HINT)
+                     "Mandami lo @username: funziona anche se non ha mai scritto al bot.\n"
+                     "In alternativa l'ID numerico o un messaggio inoltrato." + HINT)
 
 @admin_router.message(Command("admin_del"))
 async def admin_del(msg: Message, state: FSMContext):
@@ -1036,6 +1062,9 @@ async def admin_del(msg: Message, state: FSMContext):
 async def cb_admins(cb: CallbackQuery):
     rows = await db.list_admins()
     body = "\n".join(f"<code>{r['user_id']}</code> @{r['username']}" for r in rows) or "nessun admin aggiuntivo"
+    nomi = await db.list_admin_names()
+    if nomi:
+        txt += "\n" + "\n".join("@" + r["username"] for r in nomi)
     await cb.message.edit_text(f"Admin:\n\n{body}", reply_markup=kb.back())
     await cb.answer()
 
@@ -1394,21 +1423,18 @@ async def ask_input(msg: Message, state: FSMContext):
         await state.clear()
         return await msg.answer("Assegnazione revocata." if row else "Assegnazione non trovata.",
                                 reply_markup=kb.back())
-
+    if action == "admin_add":
+        await state.clear()
+        return await _add_by(msg, raw)
+    if action == "admin_del":
+        await state.clear()
+        return await _del_by(msg, raw)
+      
     uid = await _target(msg, raw)
     if not uid:
         return await _need_target(msg)
     await db.ensure_user(uid)
-
-    if action == "admin_add":
-        await db.add_admin(uid, None, msg.from_user.id)
-        await db.log(msg.from_user.id, "admin_add", str(uid))
-        testo = f"{uid} ora è amministratore."
-    elif action == "admin_del":
-        await db.del_admin(uid)
-        await db.clear_anon_by_user(uid)
-        await db.log(msg.from_user.id, "admin_del", str(uid))
-        testo = f"{uid} non è più amministratore."
+  
     elif action == "ban":
         await db.ban(uid, "deciso da admin")
         await db.log(msg.from_user.id, "ban", str(uid))
