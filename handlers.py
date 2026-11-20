@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import io
+import shutil
 import json
 import uuid
 from pathlib import Path
@@ -633,12 +634,14 @@ async def bulk_input(msg: Message, state: FSMContext):
         await msg.bot.download(msg.photo[-1], destination=buf)
         try:
             letto = await asyncio.to_thread(ocr_bytes, buf.getvalue())
-        except Exception:
-            letto = ""
+        except Exception as e:
+            return await msg.answer(
+                f"OCR in errore: {type(e).__name__}: {e}\n"
+                f"binario: {shutil.which('tesseract')}")
         testo = (msg.caption or "") + "\n" + letto
         if not letto.strip() and not (msg.caption or "").strip():
-            return await msg.answer("Non sono riuscito a leggere testo nella foto. "
-                                    "Rimandala più dritta e più vicina, oppure usa un .txt.")
+            return await msg.answer("Ho ricevuto la foto ma non ci ho letto niente. "
+                                    "Prova a mandarla come .txt o più dritta.")
     else:
         testo = msg.text or ""
 
