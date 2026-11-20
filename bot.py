@@ -68,7 +68,11 @@ AiohttpSession.proxy = property(
 
 
 def nuova_sessione(proxy, api=None):
-    session = AiohttpSession(timeout=TIMEOUT, api=api) if api else AiohttpSession(timeout=TIMEOUT)
+    if api:
+        from aiogram.client.telegram import TelegramAPIServer
+        session = AiohttpSession(api=TelegramAPIServer.from_base(api), timeout=TIMEOUT)
+    else:
+        session = AiohttpSession(timeout=TIMEOUT)
     if proxy and proxy.startswith("socks"):
         session._conn_proxy = proxy
         session.proxy = None
