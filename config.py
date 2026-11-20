@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 SUPER_ADMINS = {int(x) for x in os.environ.get("SUPER_ADMINS", "").replace(" ", "").split(",") if x}
 GROUP_ID = int(os.environ.get("GROUP_ID", "0") or 0)
