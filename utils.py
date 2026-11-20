@@ -26,10 +26,12 @@ class Trigger(BaseFilter):
                         return True
         return False
 
+
 class NotCommand(BaseFilter):
     async def __call__(self, message: Message) -> bool:
         t = message.text or message.caption or ""
         return not t.startswith("/")
+
 
 def user_kb(days):
     return K(inline_keyboard=[[B(text="Ricevi una lista", callback_data="u:get")]])
@@ -37,48 +39,53 @@ def user_kb(days):
 
 def admin_menu():
     return K(inline_keyboard=[
-        [B(text="Aggiungi lista", callback_data="a:add")],
-        [B(text="Liste libere", callback_data="a:free"), B(text="Assegnazioni", callback_data="a:hist")],
-        [B(text="Utenti", callback_data="a:users"), B(text="Admin", callback_data="a:admins")],
-        [B(text="Impostazioni", callback_data="a:set"), B(text="Statistiche", callback_data="a:stats")],
-        [B(text="Esporta", callback_data="a:exp")],
+        [B(text="➕ Aggiungi lista", callback_data="a:add")],
+        [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist")],
+        [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
+        [B(text="🛡 Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
+        [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
+        [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
+        [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
     ])
 
 
 def kinds():
     return K(inline_keyboard=[
-        [B(text="Link M3U", callback_data="a:k:m3u")],
-        [B(text="Xtream Codes", callback_data="a:k:xtream")],
-        [B(text="Stalker Portal", callback_data="a:k:stalker")],
-        [B(text="Indietro", callback_data="a:menu")],
+        [B(text="🔗 Link M3U", callback_data="a:k:m3u")],
+        [B(text="🌐 Xtream Codes", callback_data="a:k:xtream")],
+        [B(text="📡 Stalker Portal", callback_data="a:k:stalker")],
+        [B(text="⬅️ Indietro", callback_data="a:menu")],
     ])
 
 
 def confirm(cid):
     return K(inline_keyboard=[
-        [B(text="CONFERMA E SALVA", callback_data=f"a:ok:{cid}")],
-        [B(text="Annulla", callback_data="a:cancel")],
+        [B(text="✅ CONFERMA E SALVA", callback_data=f"a:ok:{cid}")],
+        [B(text="❌ Annulla", callback_data="a:cancel")],
     ])
 
 
 def back():
-    return K(inline_keyboard=[[B(text="Indietro", callback_data="a:menu")]])
+    return K(inline_keyboard=[[B(text="⬅️ Menu", callback_data="a:menu")]])
 
 
-def settings_kb(cooldown, proof, enabled, gonly):
+def settings_kb(cooldown, proof, enabled, gonly, group_id):
+    gid = group_id if group_id and group_id != "0" else "non impostato"
     return K(inline_keyboard=[
-        [B(text=f"Cooldown: {cooldown} giorni", callback_data="s:cool")],
-        [B(text=f"Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
-        [B(text=f"Solo membri del gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
-        [B(text=f"Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
-        [B(text="Testo benvenuto", callback_data="s:wel"), B(text="Testo rifiuto", callback_data="s:deny")],
-        [B(text="Testo blocco non-membri", callback_data="s:ntext")],
-        [B(text="Indietro", callback_data="a:menu")],
+        [B(text=f"⏳ Attesa: {cooldown} giorni", callback_data="s:cool")],
+        [B(text=f"👥 Gruppo: {gid}", callback_data="s:group")],
+        [B(text="🔗 Link d'invito", callback_data="s:link")],
+        [B(text=f"🖼 Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
+        [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
+        [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
+        [B(text="✏️ Testo benvenuto", callback_data="s:wel"), B(text="✏️ Testo rifiuto", callback_data="s:deny")],
+        [B(text="✏️ Testo blocco", callback_data="s:ntext")],
+        [B(text="⬅️ Menu", callback_data="a:menu")],
     ])
 
 
 def user_row(uid, banned):
-    return [B(text=("Sblocca" if banned else "Banna"),
+    return [B(text=("✅ Sblocca" if banned else "🚫 Banna"),
               callback_data=f"u:{'unban' if banned else 'ban'}:{uid}")]
 
 
