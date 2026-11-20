@@ -89,8 +89,12 @@ def build_dispatcher() -> Dispatcher:
 
 def nuova_sessione(proxy):
     session = AiohttpSession()
-    session._proxy_url = proxy
-    session.proxy = None if (proxy and proxy.startswith("socks")) else proxy
+    for nome, valore in (("_proxy_url", proxy),
+                         ("proxy", None if (proxy and proxy.startswith("socks")) else proxy)):
+        try:
+            setattr(session, nome, valore)
+        except Exception as e:
+            print(f"Attributo {nome} non impostato ({type(e).__name__}), proseguo")
     return session
 
 
