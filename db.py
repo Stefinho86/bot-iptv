@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS assignments(
   id SERIAL PRIMARY KEY, list_id INTEGER NOT NULL, user_id BIGINT NOT NULL,
   assigned_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, revoked BOOLEAN NOT NULL DEFAULT FALSE);
 
+CREATE TABLE IF NOT EXISTS anon_verified(
+  chat_id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, verified_at TIMESTAMPTZ NOT NULL);
+  
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 
 CREATE TABLE IF NOT EXISTS logs(
@@ -127,6 +130,26 @@ async def del_admin(uid):
 async def list_admins():
     async with _pool.acquire() as c:
         return await c.fetch("SELECT user_id, username FROM admins ORDER BY added_at")
+
+async def set_anon_verified(chat_id, user_id):
+    async with _pool.acquire() as c:
+        await c.execute("INSERT INTO anon_verified(chat_id,user_id,verified_at) VALUES($1,$2,$3) "
+                        "ON CONFLICT(chat_id) DO UPDATE SET user_id=excluded.user_id, "
+                        "verified_at=excluded.verified_at", chat_id, user_id, now())
+
+async def get_anon_verified(chat_id):
+    async with _pool.acquire() as c:
+        return await c.fetchval("SELECT user_id FROM anon_verified WHERE chat_id=$1", chat_id)
+
+
+async def clear_anon_verified(chat_id):
+    async with _pool.acquire() as c:
+        await c.execute("DELETE FROM anon_verified WHERE chat_id=$1", chat_id)
+
+
+async def clear_anon_by_user(uid):
+    async with _pool.acquire() as c:
+        await c.execute("DELETE FROM anon_verified WHERE user_id=$1", uid)
 
 
 async def touch_user(uid, username, full_name):
