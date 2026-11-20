@@ -19,6 +19,8 @@ USER_CMDS = [
 ]
 ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin", description="Pannello admin"),
+    BotCommand(command="comandi", description="Elenco comandi"),
+    BotCommand(command="ping", description="Verifica e chat id"),
     BotCommand(command="aggiungi", description="Aggiungi lista"),
     BotCommand(command="liberi", description="Liste libere"),
     BotCommand(command="assegnazioni", description="Storico assegnazioni"),
