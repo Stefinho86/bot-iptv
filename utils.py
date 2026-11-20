@@ -1,4 +1,3 @@
-import secrets
 import time
 
 from aiogram.filters import BaseFilter
@@ -9,25 +8,11 @@ import db
 
 ANON_ID = 1087968824
 
-_ANON_OK = {}
 _TOKENS = {}
 
 
-def anon_chat_ok(chat_id):
-    exp = _ANON_OK.get(chat_id)
-    if not exp:
-        return False
-    if exp < time.time():
-        _ANON_OK.pop(chat_id, None)
-        return False
-    return True
-
-
-async def mark_anon_ok(chat_id, minutes):
-    _ANON_OK[chat_id] = time.time() + max(1, minutes) * 60
-
-
 def new_token(chat_id):
+    import secrets
     t = secrets.token_urlsafe(9)
     _TOKENS[t] = (chat_id, time.time() + 600)
     return t
@@ -49,9 +34,16 @@ def _event_parts(event):
     return user, sc, chat
 
 
+async def anon_is_admin(chat_id) -> bool:
+    uid = await db.get_anon_verified(chat_id)
+    if not uid:
+        return False
+    return await db.is_admin(uid)
+
+
 class IsAdmin(BaseFilter):
     async def __call__(self, event) -> bool:
-        user, sc, _ = _event_parts(event)
+        user, sc, chat = _event_parts(event)
         if not user:
             return False
         if user.id == ANON_ID:
@@ -60,19 +52,19 @@ class IsAdmin(BaseFilter):
             gid = await db.get_group_id()
             if gid and sc.id != gid:
                 return False
-            return anon_chat_ok(sc.id)
+            return await anon_is_admin(sc.id)
         return await db.is_admin(user.id)
 
 
 class AnonUnverified(BaseFilter):
     async def __call__(self, event) -> bool:
-        user, sc, _ = _event_parts(event)
+        user, sc, chat = _event_parts(event)
         if not user or user.id != ANON_ID or not sc:
             return False
         gid = await db.get_group_id()
         if gid and sc.id != gid:
             return False
-        return not anon_chat_ok(sc.id)
+        return not await anon_is_admin(sc.id)
 
 
 async def is_admin_event(event) -> bool:
@@ -81,8 +73,9 @@ async def is_admin_event(event) -> bool:
 
 async def is_admin_cb(cb) -> bool:
     if cb.from_user.id == ANON_ID:
-        gid = await db.get_group_id()
-        return bool(gid and cb.message and cb.message.chat.id == gid and anon_chat_ok(gid))
+        if not cb.message:
+            return False
+        return await anon_is_admin(cb.message.chat.id)
     return await db.is_admin(cb.from_user.id)
 
 
@@ -120,7 +113,8 @@ def admin_menu():
         [B(text="🛡 Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
         [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
-        [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="⛔ Accendi / spegni", callback_data="a:toggle")],
+        [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="🩺 Stato", callback_data="a:stato")],
+        [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
     ])
 
 
@@ -165,7 +159,7 @@ def user_row(uid, banned):
 
 
 _MEMBER_CACHE = {}
-POS_TTL = 600
+POS_TTL = 300
 NEG_TTL = 60
 
 
