@@ -53,16 +53,11 @@ def make_connector(proxy):
     return aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl.create_default_context())
 
 
-class SafeSession(AiohttpSession):
-    def __init__(self, timeout=None, proxy=None):
-        if timeout is None:
-            super().__init__()
-        else:
-            super().__init__(timeout=timeout)
-        self.proxy = proxy
+async def _create_connector(self, *args, **kwargs):
+    return make_connector(getattr(self, "_proxy_url", None))
 
-    async def create_connector(self, *args, **kwargs):
-        return make_connector(self.proxy)
+
+AiohttpSession.create_connector = _create_connector
 
 
 async def _health(_):
@@ -91,6 +86,13 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
+def nuova_sessione(proxy):
+    session = AiohttpSession()
+    session._proxy_url = proxy
+    session.proxy = None if (proxy and proxy.startswith("socks")) else proxy
+    return session
+
+
 async def _diag(proxy):
     try:
         a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET)]
@@ -99,8 +101,11 @@ async def _diag(proxy):
         print(f"DNS IPv4 fallito: {repr(e)}")
     try:
         conn = make_connector(proxy)
+        kw = {}
+        if proxy and not proxy.startswith("socks"):
+            kw["proxy"] = proxy
         async with aiohttp.ClientSession(
-                connector=conn, timeout=aiohttp.ClientTimeout(total=20)) as s:
+                connector=conn, timeout=aiohttp.ClientTimeout(total=20), **kw) as s:
             async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe") as r:
                 print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
     except Exception as e:
@@ -146,13 +151,7 @@ async def run_once():
     if proxy:
         print(f"Proxy configurato: {proxy}")
 
-    try:
-        session = SafeSession(timeout=aiohttp.ClientTimeout(total=60, connect=20), proxy=proxy)
-    except Exception as e:
-        print(f"Proxy non utilizzabile ({type(e).__name__}), proseguo diretto")
-        proxy = None
-        session = SafeSession(timeout=aiohttp.ClientTimeout(total=60, connect=20))
-
+    session = nuova_sessione(proxy)
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
