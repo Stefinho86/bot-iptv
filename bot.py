@@ -46,7 +46,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="comandi", description="Elenco comandi"),
 ]
 
-TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
+TIMEOUT = 20
 
 
 def make_connector(conn_proxy):
