@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import socket
+import ssl
 import time
 
 import aiohttp
@@ -45,11 +46,23 @@ ADMIN_CMDS = USER_CMDS + [
 ]
 
 
+class SafeSession(AiohttpSession):
+    def __init__(self, timeout=None, proxy=None):
+        if timeout is None:
+            super().__init__()
+        else:
+            super().__init__(timeout=timeout)
+        self.proxy = proxy
+
+    async def create_connector(self, *args, **kwargs):
+        return aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl.create_default_context())
+
+
 async def _health(_):
     return web.Response(text="ok")
 
 
-async def start_health():
+async def start_health_once():
     port = os.getenv("PORT")
     if not port:
         return
@@ -58,6 +71,7 @@ async def start_health():
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(port)).start()
+    print(f"Health server su :{port}")
 
 
 def build_dispatcher() -> Dispatcher:
@@ -82,7 +96,9 @@ async def _diag():
     except Exception as e:
         print(f"DNS IPv6 assente: {type(e).__name__}")
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+        conn = aiohttp.TCPConnector(family=socket.AF_INET)
+        async with aiohttp.ClientSession(
+                connector=conn, timeout=aiohttp.ClientTimeout(total=15)) as s:
             async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe") as r:
                 print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
     except Exception as e:
@@ -121,17 +137,11 @@ async def _registra_comandi(bot):
     print("Comandi non registrati, usa /setcommands su BotFather")
 
 
-async def main():
-    logging.basicConfig(level=logging.INFO)
+async def run_once():
     await db.init()
-    await start_health()
 
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
-    session = AiohttpSession(
-        timeout=aiohttp.ClientTimeout(total=60, connect=20),
-        family=socket.AF_INET,
-        proxy=proxy,
-    )
+    session = SafeSession(timeout=aiohttp.ClientTimeout(total=60, connect=20), proxy=proxy)
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
@@ -165,11 +175,17 @@ async def main():
         await db.close()
 
 
-if __name__ == "__main__":
+async def supervisor():
+    logging.basicConfig(level=logging.INFO)
+    await start_health_once()
     while True:
         try:
-            asyncio.run(main())
+            await run_once()
         except Exception as e:
             print(f"Crash: {type(e).__name__}: {e}")
         print("Riavvio interno tra 15 secondi")
-        time.sleep(15)
+        await asyncio.sleep(15)
+
+
+if __name__ == "__main__":
+    asyncio.run(supervisor())
