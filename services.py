@@ -276,7 +276,20 @@ async def test_list(kind, payload):
 GETPHP = re.compile(r"https?://[^\s<>\"']*?/get\.php\?[^\s<>\"']*?username=([^&\s]+)"
                     r"[^\s<>\"']*?password=([^&\s]+)", re.I)
 
-
+def _host_voto(text, host):
+    parti = host.split(".")
+    if len(parti) < 2:
+        return host
+    dominio = ".".join(parti[-2:])
+    conta = {}
+    pat = r"(?<![a-z0-9.\-@/])[a-z0-9][a-z0-9.\-]*\." + re.escape(dominio)
+    for m in re.finditer(pat, text, re.I):
+        h = m.group(0).lower().rstrip(".")
+        conta[h] = conta.get(h, 0) + 1
+    if not conta:
+        return host
+    return max(conta, key=conta.get)
+    
 def detect_many(text):
     if not text:
         return []
@@ -298,7 +311,8 @@ def detect_many(text):
         srv_host = (m2.group(1), m2.group(2))
     for m in GETPHP.finditer(text):
         raw = m.group(0)
-        server = _base(raw)
+        user = m.group(1).rstrip(".,;:)]'\"")
+        pwd = m.group(2).rstrip(".,;:)]'\"")
         alts = []
         net = re.match(r"(https?://)([^/\s]+)", raw)
         if net:
@@ -307,17 +321,15 @@ def detect_many(text):
                 host, port = netloc.rpartition(":")[0], netloc.rpartition(":")[2]
             else:
                 host, port = netloc, ""
-            host = host.rsplit("@", 1)[-1]
-            if srv_host:
-                srv = f"{scheme}{srv_host[0]}:{srv_host[1] or port or 80}"
-                if srv != server:
-                    alts.append(server)
-                server = srv
-            elif "@" in netloc:
+            host = _host_voto(text, host.rsplit("@", 1)[-1])
+            server = f"{scheme}{host}" + (f":{port}" if port else "")
+            if "@" in netloc:
                 alts.append(f"{scheme}{netloc.split('@', 1)[1]}")
-        add({"kind": "xtream", "label": f"{server} · {m.group(1)}",
-             "payload": {"server": server, "username": m.group(1),
-                         "password": m.group(2), "alts": alts}})
+        else:
+            server = _base(raw)
+        add({"kind": "xtream", "label": f"{server} · {user}",
+             "payload": {"server": server, "username": user,
+                         "password": pwd, "alts": alts}})
 
     for m in URL.finditer(text):
         u = m.group(0).rstrip(".,;)")
