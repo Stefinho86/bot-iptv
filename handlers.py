@@ -77,11 +77,17 @@ def _payload_text(kind, p):
 
 
 def _forwarded_uid(msg):
-    if getattr(msg, "forward_from", None):
-        return msg.forward_from.id
     fo = getattr(msg, "forward_origin", None)
-    sender = getattr(fo, "sender_user", None) if fo else None
-    return sender.id if sender else None
+    if fo is not None:
+        mittente = getattr(fo, "sender_user", None)
+        if mittente:
+            return mittente.id
+        chat = getattr(fo, "sender_chat", None)
+        if chat:
+            return chat.id
+        return None
+    vecchio = getattr(msg, "forward_from", None)
+    return vecchio.id if vecchio else None
 
 
 async def resolve_uid(bot, text):
@@ -100,7 +106,11 @@ async def resolve_uid(bot, text):
         chat = await bot.get_chat("@" + name)
         return chat.id
     except Exception:
-        return None
+        pass
+    righe = await db.find_users(name)
+    if len(righe) == 1:
+        return righe[0]["user_id"]
+    return None
 
 
 async def _target(msg, raw=None):
@@ -111,8 +121,9 @@ async def _target(msg, raw=None):
 
 
 async def _need_target(msg):
-    await msg.answer("Non ho trovato questo utente. Mandami l'ID numerico, lo @username, "
-                     "oppure inoltra un suo messaggio." + HINT)
+    await msg.answer("Non riesco a risolvere quel nome. Telegram permette di cercare uno "
+                     "@username solo se il bot quella persona l'ha già incontrata.\n\n"
+                     "Inoltra qui un suo messaggio, oppure mandami il suo ID numerico." + HINT)
 
 
 async def _stato_text(msg, bot):
@@ -999,9 +1010,9 @@ async def admin_add(msg: Message, state: FSMContext):
         return await msg.answer(f"{uid} ora è amministratore.", reply_markup=kb.back())
     await state.set_state(Ask.wait)
     await state.update_data(action="admin_add")
-    await msg.answer("Chi vuoi aggiungere come amministratore? Mandami ID, @username "
-                     "o inoltra un suo messaggio." + HINT)
-
+    await msg.answer("Chi vuoi aggiungere come amministratore?\n\n"
+                     "Inoltra qui un suo messaggio: è il modo che funziona sempre.\n"
+                     "Se non puoi, mandami il suo ID numerico." + HINT)
 
 @admin_router.message(Command("admin_del"))
 async def admin_del(msg: Message, state: FSMContext):
