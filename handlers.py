@@ -477,8 +477,10 @@ async def cb_kind(cb: CallbackQuery, state: FSMContext):
     if kind == "bulk":
         await state.set_state(Add.bulk)
         await cb.message.edit_text(
-            "Mandami un file <b>.txt</b> con le liste dentro, oppure incolla il testo.\n"
-            "Riconosco Xtream, M3U e Stalker e ti mostro un riepilogo prima di salvare." + HINT,
+            "Mandami il <b>file .txt</b>, uno <b>screenshot</b> con le liste nella didascalia, "
+            "oppure incolla il testo.\n"
+            "Riconosco Xtream, M3U e Stalker, scarto le copie e ti mostro cosa ho trovato "
+            "prima di salvare." + HINT,
             reply_markup=kb.back())
         return await cb.answer()
     await state.set_state(Add.data)
@@ -555,6 +557,67 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
 
 
 # ---- import massivo da txt ----
+def _bulk_line(n, it):
+    p = it["payload"]
+    if it["kind"] == "xtream":
+        return f"{n}. <b>XT</b> <code>{p['username']}</code> · <code>{p['server']}</code>"
+    if it["kind"] == "stalker":
+        return f"{n}. <b>ST</b> <code>{p['mac']}</code> · <code>{p['portal']}</code>"
+    return f"{n}. <b>M3U</b> <code>{p['url'][:80]}</code>"
+
+
+BULK_PER_PAGE = 10
+
+
+def _bulk_summary(cid):
+    d = BULK[cid]
+    items = d["items"]
+    per_tipo = {}
+    for it in items:
+        per_tipo[it["kind"]] = per_tipo.get(it["kind"], 0) + 1
+    righe = "\n".join(f"• {k}: {v}" for k, v in sorted(per_tipo.items()))
+    anteprima = "\n".join(_bulk_line(n, it) for n, it in enumerate(items[:10], 1))
+    extra = f"\n… e altre {len(items) - 10}" if len(items) > 10 else ""
+    dup = f" ({d['dup']} duplicate scartate)" if d.get("dup") else ""
+    testo = (f"Ho letto il contenuto e riconosciuto <b>{len(items)}</b> liste valide{dup}:\n"
+             f"{righe}\n\n<b>Anteprima</b>\n{anteprima}{extra}\n\n"
+             f"Posso salvarle tutte, oppure scegli tu quali tenere.")
+    kbd = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ SALVA TUTTE ({len(items)})", callback_data=f"a:bok:{cid}")],
+        [InlineKeyboardButton(text="☑️ SCEGLI QUALI", callback_data=f"a:bsel:{cid}")],
+        [InlineKeyboardButton(text="❌ Annulla", callback_data="a:cancel")],
+    ])
+    return testo, kbd
+
+
+def _bulk_page(cid, page):
+    d = BULK[cid]
+    items = d["items"]
+    sel = d["sel"]
+    pagine = max(1, (len(items) - 1) // BULK_PER_PAGE + 1)
+    page = max(0, min(page, pagine - 1))
+    inizio = page * BULK_PER_PAGE
+    righe = [_bulk_line(i + 1, items[i])
+             for i in range(inizio, min(inizio + BULK_PER_PAGE, len(items)))]
+    testo = (f"<b>Scegli quali salvare</b> — pagina {page + 1}/{pagine}\n"
+             f"Selezionate: {len(sel)} su {len(items)}\n\n" + "\n".join(righe))
+    kbd = []
+    for i in range(inizio, min(inizio + BULK_PER_PAGE, len(items))):
+        kbd.append([InlineKeyboardButton(text=("✅ " if i in sel else "⬜ ") + str(i + 1),
+                                         callback_data=f"a:btg:{cid}:{i}:{page}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"a:bpg:{cid}:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"))
+    if (page + 1) * BULK_PER_PAGE < len(items):
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:bpg:{cid}:{page + 1}"))
+    kbd.append(nav)
+    kbd.append([InlineKeyboardButton(text=f"💾 SALVA SELEZIONATE ({len(sel)})",
+                                     callback_data=f"a:bok:{cid}")])
+    kbd.append([InlineKeyboardButton(text="⬅️ Riepilogo", callback_data=f"a:ball:{cid}")])
+    return testo, InlineKeyboardMarkup(inline_keyboard=kbd)
+
+
 @admin_router.message(Add.bulk, F.document | F.photo | F.text)
 async def bulk_input(msg: Message, state: FSMContext):
     testo = ""
@@ -579,24 +642,72 @@ async def bulk_input(msg: Message, state: FSMContext):
     else:
         testo = msg.text or ""
 
-    items = detect_many(testo)
-    if not items:
+    grezzi = detect_many(testo)
+    if not grezzi:
         return await msg.answer("Non ho trovato nessuna lista riconoscibile. Riprova o /annulla.")
 
-    per_tipo = {}
-    for it in items:
-        per_tipo[it["kind"]] = per_tipo.get(it["kind"], 0) + 1
-    righe = "\n".join(f"• {k}: {v}" for k, v in per_tipo.items())
+    visti, items, dup = set(), [], 0
+    for it in grezzi:
+        p = it["payload"]
+        chiave = (it["kind"], p.get("server"), p.get("url"), p.get("portal"),
+                  p.get("username"), p.get("password"), p.get("mac"))
+        if chiave in visti:
+            dup += 1
+            continue
+        visti.add(chiave)
+        items.append(it)
+
     cid = uuid.uuid4().hex[:10]
-    BULK[cid] = items
+    BULK[cid] = {"items": items, "sel": set(range(len(items))), "dup": dup}
     await state.set_state(Add.confirm)
-    await msg.answer(f"Ho riconosciuto <b>{len(items)}</b> liste:\n{righe}\n\n"
-                     f"Le salvo tutte e poi le testo in background, escludendo quelle rotte. Confermi?",
-                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                         [InlineKeyboardButton(text=f"✅ SALVA {len(items)} LISTE",
-                                               callback_data=f"a:bok:{cid}")],
-                         [InlineKeyboardButton(text="❌ Annulla", callback_data="a:cancel")],
-                     ]))
+    testo_rip, kbd = _bulk_summary(cid)
+    await msg.answer(testo_rip, reply_markup=kbd)
+
+
+@admin_router.callback_query(F.data.startswith("a:bsel:"))
+async def bulk_sel(cb: CallbackQuery):
+    cid = cb.data.split(":")[2]
+    if cid not in BULK:
+        return await cb.answer("Riepilogo scaduto", show_alert=True)
+    testo, kbd = _bulk_page(cid, 0)
+    await cb.message.edit_text(testo, reply_markup=kbd)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:bpg:"))
+async def bulk_page(cb: CallbackQuery):
+    _, _, cid, page = cb.data.split(":")
+    if cid not in BULK:
+        return await cb.answer("Riepilogo scaduto", show_alert=True)
+    testo, kbd = _bulk_page(cid, int(page))
+    await cb.message.edit_text(testo, reply_markup=kbd)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:btg:"))
+async def bulk_toggle(cb: CallbackQuery):
+    _, _, cid, idx, page = cb.data.split(":")
+    d = BULK.get(cid)
+    if not d:
+        return await cb.answer("Riepilogo scaduto", show_alert=True)
+    i = int(idx)
+    if i in d["sel"]:
+        d["sel"].discard(i)
+    else:
+        d["sel"].add(i)
+    testo, kbd = _bulk_page(cid, int(page))
+    await cb.message.edit_text(testo, reply_markup=kbd)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:ball:"))
+async def bulk_back(cb: CallbackQuery):
+    cid = cb.data.split(":")[2]
+    if cid not in BULK:
+        return await cb.answer("Riepilogo scaduto", show_alert=True)
+    testo, kbd = _bulk_summary(cid)
+    await cb.message.edit_text(testo, reply_markup=kbd)
+    await cb.answer()
 
 
 async def _bulk_test(msg, ids):
@@ -625,13 +736,17 @@ async def _bulk_test(msg, ids):
 
 @admin_router.callback_query(F.data.startswith("a:bok:"))
 async def bulk_confirm(cb: CallbackQuery, state: FSMContext):
-    items = BULK.pop(cb.data.split(":")[2], None)
+    d = BULK.pop(cb.data.split(":")[2], None)
     await state.clear()
-    if not items:
+    if not d:
         return await cb.answer("Riepilogo scaduto", show_alert=True)
-    await cb.message.edit_text("Salvo le liste...")
+    scelte = [d["items"][i] for i in sorted(d["sel"])]
+    if not scelte:
+        BULK[cb.data.split(":")[2]] = d
+        return await cb.answer("Non hai selezionato nessuna lista", show_alert=True)
+    await cb.message.edit_text(f"Salvo {len(scelte)} liste...")
     ids = []
-    for it in items:
+    for it in scelte:
         lid = await db.add_list(it["kind"], it["payload"], it.get("label") or "-", cb.from_user.id)
         ids.append(lid)
     await db.log(cb.from_user.id, "bulk_add", str(len(ids)))
