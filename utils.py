@@ -1,3 +1,4 @@
+import secrets
 import time
 
 from aiogram.filters import BaseFilter
@@ -6,10 +7,83 @@ from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
 
 import db
 
+ANON_ID = 1087968824
+
+_ANON_OK = {}
+_TOKENS = {}
+
+
+def anon_chat_ok(chat_id):
+    exp = _ANON_OK.get(chat_id)
+    if not exp:
+        return False
+    if exp < time.time():
+        _ANON_OK.pop(chat_id, None)
+        return False
+    return True
+
+
+async def mark_anon_ok(chat_id, minutes):
+    _ANON_OK[chat_id] = time.time() + max(1, minutes) * 60
+
+
+def new_token(chat_id):
+    t = secrets.token_urlsafe(9)
+    _TOKENS[t] = (chat_id, time.time() + 600)
+    return t
+
+
+def pop_token(t):
+    item = _TOKENS.pop(t, None)
+    if not item:
+        return None
+    chat_id, exp = item
+    return chat_id if exp > time.time() else None
+
+
+def _event_parts(event):
+    msg = event if isinstance(event, Message) else getattr(event, "message", None)
+    user = getattr(event, "from_user", None)
+    sc = getattr(msg, "sender_chat", None) if msg else None
+    chat = getattr(msg, "chat", None) if msg else None
+    return user, sc, chat
+
 
 class IsAdmin(BaseFilter):
-    async def __call__(self, message: Message) -> bool:
-        return await db.is_admin(message.from_user.id)
+    async def __call__(self, event) -> bool:
+        user, sc, _ = _event_parts(event)
+        if not user:
+            return False
+        if user.id == ANON_ID:
+            if not sc:
+                return False
+            gid = await db.get_group_id()
+            if gid and sc.id != gid:
+                return False
+            return anon_chat_ok(sc.id)
+        return await db.is_admin(user.id)
+
+
+class AnonUnverified(BaseFilter):
+    async def __call__(self, event) -> bool:
+        user, sc, _ = _event_parts(event)
+        if not user or user.id != ANON_ID or not sc:
+            return False
+        gid = await db.get_group_id()
+        if gid and sc.id != gid:
+            return False
+        return not anon_chat_ok(sc.id)
+
+
+async def is_admin_event(event) -> bool:
+    return await IsAdmin()(event)
+
+
+async def is_admin_cb(cb) -> bool:
+    if cb.from_user.id == ANON_ID:
+        gid = await db.get_group_id()
+        return bool(gid and cb.message and cb.message.chat.id == gid and anon_chat_ok(gid))
+    return await db.is_admin(cb.from_user.id)
 
 
 class Trigger(BaseFilter):
@@ -39,13 +113,14 @@ def user_kb(days):
 
 def admin_menu():
     return K(inline_keyboard=[
+        [B(text="🎬 Ricevi una lista", callback_data="u:get")],
         [B(text="➕ Aggiungi lista", callback_data="a:add")],
         [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist")],
         [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
         [B(text="🛡 Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
         [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
-        [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
+        [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="⛔ Accendi / spegni", callback_data="a:toggle")],
     ])
 
 
