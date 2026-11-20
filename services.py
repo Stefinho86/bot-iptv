@@ -1,3 +1,17 @@
+import io
+
+import pytesseract
+from PIL import Image, ImageOps
+
+
+def ocr_bytes(data):
+    img = Image.open(io.BytesIO(data)).convert("L")
+    w, h = img.size
+    if w < 1600:
+        img = img.resize((w * 2, h * 2), Image.LANCZOS)
+    img = ImageOps.autocontrast(img)
+    return pytesseract.image_to_string(img, lang="eng", config="--psm 6")
+      
 import asyncio
 import json
 import re
