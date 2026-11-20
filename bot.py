@@ -10,7 +10,7 @@ from aiohttp import web
 
 import config
 import db
-from handlers import admin_router, user_router
+from handlers import admin_router, anon_router, user_router
 
 USER_CMDS = [
     BotCommand(command="lista", description="Ricevi una lista IPTV"),
@@ -20,7 +20,6 @@ USER_CMDS = [
 ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin", description="Pannello admin"),
     BotCommand(command="comandi", description="Elenco comandi"),
-    BotCommand(command="ping", description="Verifica e chat id"),
     BotCommand(command="aggiungi", description="Aggiungi lista"),
     BotCommand(command="liberi", description="Liste libere"),
     BotCommand(command="assegnazioni", description="Storico assegnazioni"),
@@ -34,6 +33,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="cooldown", description="Imposta giorni"),
     BotCommand(command="setgroup", description="Imposta gruppo"),
     BotCommand(command="setlink", description="Imposta link gruppo"),
+    BotCommand(command="verifica", description="Riverifica admin anonimo"),
     BotCommand(command="toggle", description="Accendi/spegni"),
     BotCommand(command="esporta", description="Esporta liste libere"),
 ]
@@ -62,6 +62,7 @@ async def main():
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.include_router(admin_router)
+    dp.include_router(anon_router)
     dp.include_router(user_router)
 
     await bot.set_my_commands(USER_CMDS, scope=BotCommandScopeDefault())
