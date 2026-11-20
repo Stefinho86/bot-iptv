@@ -723,6 +723,7 @@ async def _bulk_test(msg, ids):
         await db.set_test(lid, res.ok, res.note)
         if res.ok:
             ok += 1
+            await db.set_payload(lid, p)
         else:
             rotte += 1
             await db.mark_broken(lid)
