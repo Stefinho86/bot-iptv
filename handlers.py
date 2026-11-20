@@ -248,6 +248,9 @@ async def deliver(msg, user, bot, adm=False):
     if await db.get_int("enabled") == 0:
         return await msg.answer("Bot momentaneamente spento. Riprova più tardi.")
     await db.touch_user(uid, user.username, user.full_name)
+    u = await db.get_user(uid)
+    if u and u["banned"]:
+        return await msg.answer(f"Sei bannato. Motivo: {u['ban_reason'] or 'non indicato'}")
     if not adm and not await kb.member_ok(bot, uid):
         return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
     if uid in BUSY:
