@@ -1,3 +1,5 @@
+import time
+
 from aiogram.filters import BaseFilter
 from aiogram.types import Message
 from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
@@ -59,12 +61,14 @@ def back():
     return K(inline_keyboard=[[B(text="Indietro", callback_data="a:menu")]])
 
 
-def settings_kb(cooldown, proof, enabled):
+def settings_kb(cooldown, proof, enabled, gonly):
     return K(inline_keyboard=[
         [B(text=f"Cooldown: {cooldown} giorni", callback_data="s:cool")],
         [B(text=f"Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
+        [B(text=f"Solo membri del gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
         [B(text=f"Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
         [B(text="Testo benvenuto", callback_data="s:wel"), B(text="Testo rifiuto", callback_data="s:deny")],
+        [B(text="Testo blocco non-membri", callback_data="s:ntext")],
         [B(text="Indietro", callback_data="a:menu")],
     ])
 
@@ -72,3 +76,42 @@ def settings_kb(cooldown, proof, enabled):
 def user_row(uid, banned):
     return [B(text=("Sblocca" if banned else "Banna"),
               callback_data=f"u:{'unban' if banned else 'ban'}:{uid}")]
+
+
+_MEMBER_CACHE = {}
+POS_TTL = 600
+NEG_TTL = 60
+
+
+async def member_ok(bot, uid):
+    gid = await db.get_group_id()
+    if gid == 0 or await db.get_int("group_only") == 0:
+        return True
+    now = time.time()
+    hit = _MEMBER_CACHE.get(uid)
+    if hit and now - hit[0] < hit[1]:
+        return hit[2]
+    try:
+        m = await bot.get_chat_member(gid, uid)
+        ok = m.status in ("creator", "administrator", "member") or (
+            m.status == "restricted" and getattr(m, "is_member", False))
+    except Exception:
+        ok = False
+    _MEMBER_CACHE[uid] = (now, POS_TTL if ok else NEG_TTL, ok)
+    return ok
+
+
+async def not_member_text():
+    txt = await db.get_setting("not_member")
+    link = (await db.get_setting("group_link") or "").strip()
+    out = txt.replace("{link}", link).strip()
+    if link and link not in txt:
+        out += f"\n\n{link}"
+    return out
+
+
+async def join_kb():
+    link = (await db.get_setting("group_link") or "").strip()
+    if not link:
+        return None
+    return K(inline_keyboard=[[B(text="Entra nel gruppo", url=link)]])
