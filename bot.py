@@ -135,8 +135,10 @@ async def _attendi_rete(bot) -> bool:
             print(f"Avviato come @{me.username}")
             return True
         except Exception as e:
+            print(f"Telegram non raggiungibile ({type(e).__name__}), tentativo {i}/3")
+            traceback.print_exc()
+            await asyncio.sleep(5)
     return False
-
 
 async def _registra_comandi(bot):
     await asyncio.sleep(8)
@@ -153,7 +155,6 @@ async def _registra_comandi(bot):
         except Exception as e:
             print(f"Comandi non registrati ({type(e).__name__})")
             await asyncio.sleep(15)
-
 
 async def run_once():
     await db.init()
