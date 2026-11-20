@@ -42,18 +42,9 @@ async def anon_is_admin(chat_id) -> bool:
 
 
 class IsAdmin(BaseFilter):
-    async def __call__(self, event) -> bool:
-        user, sc, chat = _event_parts(event)
-        if not user:
-            return False
-        if user.id == ANON_ID:
-            if not sc:
-                return False
-            gid = await db.get_group_id()
-            if gid and sc.id != gid:
-                return False
-            return await anon_is_admin(sc.id)
-        return await db.is_admin(user.id)
+    async def __call__(self, message: Message) -> bool:
+        u = message.from_user
+        return await db.is_admin(u.id, u.username if u else None)
 
 
 class AnonUnverified(BaseFilter):
