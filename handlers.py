@@ -11,6 +11,7 @@ from aiogram.types import (Message, CallbackQuery, FSInputFile,
                            InlineKeyboardMarkup, InlineKeyboardButton)
 
 import db
+import config
 import utils as kb
 from services import detect, preview, test_list
 from utils import IsAdmin, Trigger, NotCommand, AnonUnverified
@@ -755,8 +756,8 @@ async def cb_noop(cb: CallbackQuery):
 
 
 async def _show_users_page(cb, page):
-    tot = await db.count_users()
-    righe = await db.all_users(page * PER_PAGE, PER_PAGE)
+    tot = await db.count_users(config.SUPER_ADMINS)
+    righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
     if not tot:
         await cb.message.edit_text("Nessun utente registrato.", reply_markup=kb.back())
         return
@@ -801,9 +802,44 @@ async def cb_list_ban(cb: CallbackQuery):
         await db.log(cb.from_user.id, "ban", str(uid))
     else:
         await db.unban(uid)
-    await _show_users_page(cb, int(page))
+    if azione == "ban":
+        await _show_users_page(cb, int(page))
+    else:
+        await _show_banned_page(cb, int(page))
     await cb.answer("Bannato" if azione == "ban" else "Sbloccato")
 
+async def _show_banned_page(cb, page):
+    tot = await db.count_banned()
+    righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
+    if not tot:
+        await cb.message.edit_text("Nessun utente bannato.", reply_markup=kb.back())
+        return
+    tastiera = []
+    for r in righe:
+        nome = (r["full_name"] or r["username"] or str(r["user_id"]))[:24]
+        tastiera.append([
+            InlineKeyboardButton(text=f"🚫 {nome}", callback_data="a:noop"),
+            InlineKeyboardButton(text="Sblocca",
+                                 callback_data=f"lb:unban:{r['user_id']}:{page}"),
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"a:banned:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{(tot - 1) // PER_PAGE + 1}",
+                                    callback_data="a:noop"))
+    if (page + 1) * PER_PAGE < tot:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:banned:{page + 1}"))
+    tastiera.append(nav)
+    tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    await cb.message.edit_text(f"Utenti bannati: {tot}",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
+
+@admin_router.callback_query(F.data.startswith("a:banned"))
+async def cb_banned(cb: CallbackQuery):
+    parti = cb.data.split(":")
+    page = int(parti[2]) if len(parti) > 2 else 0
+    await _show_banned_page(cb, page)
+    await cb.answer()
 
 async def _show_admins(cb):
     righe = await db.all_admins()
