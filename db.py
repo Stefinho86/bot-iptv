@@ -394,3 +394,8 @@ async def set_payload(lid, payload):
     async with _pool.acquire() as c:
         await c.execute("UPDATE lists SET payload=$1 WHERE id=$2",
                         json.dumps(payload, ensure_ascii=False), lid)
+
+async def del_list(lid):
+    async with _pool.acquire() as c:
+        return await c.fetchval("DELETE FROM lists WHERE id=$1 AND status='free' RETURNING id",
+                                int(lid))
