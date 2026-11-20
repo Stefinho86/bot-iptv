@@ -114,8 +114,8 @@ async def _diag(proxy):
         if proxy and not proxy.startswith("socks"):
             kw["proxy"] = proxy
         async with aiohttp.ClientSession(
-                connector=conn, timeout=aiohttp.ClientTimeout(total=20), **kw) as s:
-            async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe") as r:
+                connector=conn, timeout=aiohttp.ClientTimeout(total=20)) as s:
+            async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe", **kw) as r:
                 print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
                 return True
     except Exception as e:
