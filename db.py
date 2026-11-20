@@ -261,3 +261,13 @@ async def all_free_payloads():
     async with _pool.acquire() as c:
         rows = await c.fetch("SELECT id,kind,payload,label,added_at FROM lists WHERE status='free'")
         return [{**dict(r), "added_at": r["added_at"].isoformat()} for r in rows]
+
+async def find_by_username(name):
+    async with _pool.acquire() as c:
+        return await c.fetchval("SELECT user_id FROM users WHERE username ILIKE $1 LIMIT 1", name)
+
+
+async def ensure_user(uid):
+    async with _pool.acquire() as c:
+        await c.execute("INSERT INTO users(user_id,first_seen) VALUES($1,$2) "
+                        "ON CONFLICT(user_id) DO NOTHING", uid, now())
