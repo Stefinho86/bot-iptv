@@ -350,3 +350,8 @@ async def count_free_kind(kind):
         if kind:
             return await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free' AND kind=$1", kind)
         return await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free'")
+
+async def set_payload(lid, payload):
+    async with _pool.acquire() as c:
+        await c.execute("UPDATE lists SET payload=$1 WHERE id=$2",
+                        json.dumps(payload, ensure_ascii=False), lid)
