@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from aiogram import Router, F, Bot
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (Message, CallbackQuery, FSInputFile,
@@ -13,12 +13,13 @@ from aiogram.types import (Message, CallbackQuery, FSInputFile,
 import db
 import utils as kb
 from services import detect, preview, test_list
-from utils import IsAdmin, Trigger, NotCommand
+from utils import IsAdmin, Trigger, NotCommand, AnonUnverified
 
 admin_router = Router()
 admin_router.message.filter(IsAdmin())
 admin_router.callback_query.filter(IsAdmin())
 
+anon_router = Router()
 user_router = Router()
 
 BUSY = set()
@@ -108,6 +109,39 @@ async def _need_target(msg):
                      "oppure inoltra un suo messaggio." + HINT)
 
 
+# ==================== VERIFICA ANONIMI ====================
+async def _ask_verify(msg, bot):
+    me = await bot.me()
+    tok = kb.new_token(msg.chat.id)
+    url = f"https://t.me/{me.username}?start=verif_{tok}"
+    kbd = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Verifica ora", url=url)],
+        [InlineKeyboardButton(text="🔄 Ho verificato", callback_data="v:check")],
+    ])
+    await msg.answer("Stai scrivendo in <b>anonimo</b>, quindi non so chi sei.\n\n"
+                     "Premi «Verifica ora»: si apre la chat privata, premi START e la verifica "
+                     "si completa da sola. Il link scade tra 10 minuti.", reply_markup=kbd)
+
+
+@anon_router.callback_query(F.data == "v:check")
+async def cb_check(cb: CallbackQuery):
+    if kb.anon_chat_ok(cb.message.chat.id):
+        await cb.answer("Verificato. Ripeti il comando.", show_alert=True)
+    else:
+        await cb.answer("Non ancora verificato. Premi «Verifica ora».", show_alert=True)
+
+
+@anon_router.message(AnonUnverified(), F.text.startswith("/"))
+async def anon_cmd(msg: Message, bot: Bot):
+    await _ask_verify(msg, bot)
+
+
+@anon_router.callback_query(AnonUnverified())
+async def anon_cb(cb: CallbackQuery, bot: Bot):
+    await cb.answer("Prima devi verificarti", show_alert=True)
+    await _ask_verify(cb.message, bot)
+
+
 # ==================== UTENTE ====================
 async def _welcome(msg):
     days = await db.get_int("cooldown_days")
@@ -121,13 +155,46 @@ async def ping(msg: Message):
     await msg.answer(f"pong\nchat_id: <code>{msg.chat.id}</code>\ntipo chat: {msg.chat.type}")
 
 
+@user_router.message(CommandStart(deep_link=True))
+async def start_verify(msg: Message, command: CommandObject, bot: Bot):
+    args = command.args or ""
+    if not args.startswith("verif_"):
+        return await start(msg, bot)
+    chat_id = kb.pop_token(args[6:])
+    if not chat_id:
+        return await msg.answer("Link scaduto o non valido. Torna nel gruppo e riprova.")
+    await db.touch_user(msg.from_user.id, msg.from_user.username, msg.from_user.full_name)
+    if not await db.is_admin(msg.from_user.id):
+        return await msg.answer("Sei un utente Telegram valido, ma non risulti tra gli "
+                                "amministratori del bot.")
+    ttl = await db.get_int("anon_ttl_min")
+    await kb.mark_anon_ok(chat_id, ttl)
+    if await db.get_group_id() == 0:
+        await db.set_setting("group_id", str(chat_id))
+    nome = msg.from_user.first_name or "un admin"
+    try:
+        await bot.send_message(chat_id,
+                               f"✅ <a href=\"tg://user?id={msg.from_user.id}\">{nome}</a> "
+                               f"è verificato come amministratore per {ttl} minuti.\n"
+                               f"Puoi ripetere il comando.")
+    except Exception:
+        pass
+    await db.log(msg.from_user.id, "anon_verify", str(chat_id))
+    await msg.answer(f"Verifica completata, vale {ttl} minuti.\n"
+                     f"Torna nel gruppo e ripeti il comando.")
+
+
 @user_router.message(Command("start"))
 async def start(msg: Message, bot: Bot):
     await db.touch_user(msg.from_user.id, msg.from_user.username, msg.from_user.full_name)
-    if not await db.is_admin(msg.from_user.id) and not await kb.member_ok(bot, msg.from_user.id):
+    if await kb.is_admin_event(msg):
+        s = await db.stats()
+        return await msg.answer(
+            f"Pannello admin\n\nLibere: {s['free']} | Assegnate: {s['assigned']} | "
+            f"Rotte: {s['broken']} | Utenti: {s['users']} | Bannati: {s['banned']}",
+            reply_markup=kb.admin_menu())
+    if not await kb.member_ok(bot, msg.from_user.id):
         return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
-    if await db.is_admin(msg.from_user.id):
-        await msg.answer("Pannello admin:", reply_markup=kb.admin_menu())
     await _welcome(msg)
 
 
@@ -146,25 +213,25 @@ async def mine(msg: Message):
 @user_router.callback_query(F.data == "u:get")
 async def cb_get(cb: CallbackQuery, bot: Bot):
     await cb.answer("Preparo la lista...")
-    await deliver(cb.message, cb.from_user, bot)
+    await deliver(cb.message, cb.from_user, bot, await kb.is_admin_cb(cb))
 
 
 @user_router.message(Trigger(), Command("lista"))
 async def cmd_lista(msg: Message, bot: Bot):
-    await deliver(msg, msg.from_user, bot)
+    await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
 
 
 @user_router.message(Trigger(), F.text)
 async def mention_any(msg: Message, bot: Bot):
-    await deliver(msg, msg.from_user, bot)
+    await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
 
 
-async def deliver(msg, user, bot):
+async def deliver(msg, user, bot, adm=False):
     uid = user.id
     if await db.get_int("enabled") == 0:
         return await msg.answer("Bot momentaneamente spento. Riprova più tardi.")
     await db.touch_user(uid, user.username, user.full_name)
-    if not await db.is_admin(uid) and not await kb.member_ok(bot, uid):
+    if not adm and not await kb.member_ok(bot, uid):
         return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
     if uid in BUSY:
         return await msg.answer("Sto già preparando la tua lista, attendi.")
@@ -248,12 +315,24 @@ async def comandi_cmd(msg: Message, state: FSMContext):
         "/cooldown - giorni di attesa\n"
         "/setgroup - gruppo autorizzato\n"
         "/setlink - link d'invito\n"
+        "/verifica - riverifica admin anonimo\n"
         "/toggle - accendi o spegni\n"
         "/esporta - esporta le liste libere\n"
         "/annulla - interrompi\n\n"
         "Tutti accettano ID, @username o inoltro. Se lanci un comando da solo, "
         "il bot chiede cosa gli serve.",
         reply_markup=kb.back())
+
+
+@admin_router.message(Command("verifica"))
+async def verifica_cmd(msg: Message, bot: Bot):
+    await _ask_verify(msg, bot)
+
+
+@admin_router.callback_query(F.data == "a:verify")
+async def cb_verify(cb: CallbackQuery, bot: Bot):
+    await _ask_verify(cb.message, bot)
+    await cb.answer()
 
 
 @admin_router.callback_query(F.data == "a:menu")
