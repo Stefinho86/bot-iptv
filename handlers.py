@@ -565,12 +565,19 @@ async def bulk_input(msg: Message, state: FSMContext):
         buf = io.BytesIO()
         await msg.bot.download(msg.document, destination=buf)
         testo = buf.getvalue().decode("utf-8", errors="ignore")
+    elif msg.photo:
+        buf = io.BytesIO()
+        await msg.bot.download(msg.photo[-1], destination=buf)
+        try:
+            letto = await asyncio.to_thread(ocr_bytes, buf.getvalue())
+        except Exception:
+            letto = ""
+        testo = (msg.caption or "") + "\n" + letto
+        if not letto.strip() and not (msg.caption or "").strip():
+            return await msg.answer("Non sono riuscito a leggere testo nella foto. "
+                                    "Rimandala più dritta e più vicina, oppure usa un .txt.")
     else:
-        testo = msg.text or msg.caption or ""
-
-    if not testo.strip():
-        return await msg.answer("Nella foto non c'è testo. Rimandala scrivendo le liste "
-                                "nella didascalia, oppure usa un file .txt.")
+        testo = msg.text or ""
 
     items = detect_many(testo)
     if not items:
