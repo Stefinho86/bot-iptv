@@ -462,10 +462,14 @@ async def cooldown_cmd(msg: Message):
 @admin_router.message(Command("setgroup"))
 async def setgroup_cmd(msg: Message):
     p = msg.text.split(maxsplit=1)
-    if len(p) < 2:
-        return await msg.answer("Uso: /setgroup IDGRUPPO")
-    await db.set_setting("group_id", p[1])
-    await msg.answer("Gruppo impostato.")
+    if len(p) >= 2:
+        gid = p[1].strip()
+    elif msg.chat.type != "private":
+        gid = str(msg.chat.id)
+    else:
+        return await msg.answer("Uso: /setgroup IDGRUPPO, oppure scrivi /setgroup dentro il gruppo")
+    await db.set_setting("group_id", gid)
+    await msg.answer(f"Gruppo impostato: {gid}")
 
 
 @admin_router.message(Command("setlink"))
