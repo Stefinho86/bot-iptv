@@ -1,4 +1,6 @@
+import asyncio
 import datetime as dt
+import io
 import json
 import uuid
 from pathlib import Path
@@ -13,7 +15,7 @@ from aiogram.types import (Message, CallbackQuery, FSInputFile,
 import db
 import config
 import utils as kb
-from services import detect, preview, test_list
+from services import detect, detect_many, preview, test_list
 from utils import IsAdmin, Trigger, NotCommand, AnonUnverified
 
 admin_router = Router()
@@ -25,6 +27,7 @@ user_router = Router()
 
 BUSY = set()
 TMP = {}
+BULK = {}
 
 HINT = "\n\nScrivi /annulla per interrompere."
 
@@ -32,6 +35,7 @@ HINT = "\n\nScrivi /annulla per interrompere."
 class Add(StatesGroup):
     data = State()
     confirm = State()
+    bulk = State()
 
 
 class SetTxt(StatesGroup):
@@ -266,7 +270,7 @@ async def deliver(msg, user, bot, adm=False):
             return await msg.answer(f"Sei bannato. Motivo: {u['ban_reason'] or 'non indicato'}")
 
         days = await db.get_int("cooldown_days")
-        if u and u["next_available"]:
+        if not adm and u and u["next_available"]:
             nxt = u["next_available"]
             if dt.datetime.now(dt.timezone.utc) < nxt:
                 left = nxt - dt.datetime.now(dt.timezone.utc)
@@ -295,7 +299,8 @@ async def deliver(msg, user, bot, adm=False):
 
         exp = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=days)
         await db.assign(chosen["id"], uid, exp)
-        await db.set_next(uid, exp)
+        if not adm:
+            await db.set_next(uid, exp)
         await db.log(uid, "consegna", f"lista {chosen['id']}")
 
         caption = (f"<b>La tua lista IPTV</b> (#{chosen['id']})\n\n"
@@ -417,6 +422,15 @@ async def cb_revoca(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
+@admin_router.callback_query(F.data == "a:reset")
+async def cb_reset(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="reset")
+    await cb.message.edit_text("A chi vuoi azzerare l'attesa? Mandami ID, @username "
+                               "o inoltra un suo messaggio." + HINT)
+    await cb.answer()
+
+
 @admin_router.callback_query(F.data == "a:admin_add")
 async def cb_admin_add(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
@@ -460,6 +474,13 @@ async def cb_add(cb: CallbackQuery, state: FSMContext):
 @admin_router.callback_query(F.data.startswith("a:k:"))
 async def cb_kind(cb: CallbackQuery, state: FSMContext):
     kind = cb.data.split(":")[2]
+    if kind == "bulk":
+        await state.set_state(Add.bulk)
+        await cb.message.edit_text(
+            "Mandami un file <b>.txt</b> con le liste dentro, oppure incolla il testo.\n"
+            "Riconosco Xtream, M3U e Stalker e ti mostro un riepilogo prima di salvare." + HINT,
+            reply_markup=kb.back())
+        return await cb.answer()
     await state.set_state(Add.data)
     await state.update_data(kind=kind)
     hint = {
@@ -526,6 +547,81 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
+# ---- import massivo da txt ----
+@admin_router.message(Add.bulk, F.document | F.text)
+async def bulk_input(msg: Message, state: FSMContext):
+    testo = ""
+    if msg.document:
+        nome = (msg.document.file_name or "").lower()
+        if not nome.endswith((".txt", ".m3u", ".m3u8")):
+            return await msg.answer("Mandami un file .txt, .m3u o .m3u8")
+        buf = io.BytesIO()
+        await msg.bot.download(msg.document, destination=buf)
+        testo = buf.getvalue().decode("utf-8", errors="ignore")
+    else:
+        testo = msg.text or ""
+
+    items = detect_many(testo)
+    if not items:
+        return await msg.answer("Non ho trovato nessuna lista riconoscibile. Riprova o /annulla.")
+
+    per_tipo = {}
+    for it in items:
+        per_tipo[it["kind"]] = per_tipo.get(it["kind"], 0) + 1
+    righe = "\n".join(f"• {k}: {v}" for k, v in per_tipo.items())
+    cid = uuid.uuid4().hex[:10]
+    BULK[cid] = items
+    await state.set_state(Add.confirm)
+    await msg.answer(f"Ho riconosciuto <b>{len(items)}</b> liste:\n{righe}\n\n"
+                     f"Le salvo tutte e poi le testo in background, escludendo quelle rotte. Confermi?",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                         [InlineKeyboardButton(text=f"✅ SALVA {len(items)} LISTE",
+                                               callback_data=f"a:bok:{cid}")],
+                         [InlineKeyboardButton(text="❌ Annulla", callback_data="a:cancel")],
+                     ]))
+
+
+async def _bulk_test(msg, ids):
+    ok = rotte = 0
+    for n, lid in enumerate(ids, 1):
+        row = await db.get_list(lid)
+        p = await db.payload_of(row)
+        res = await test_list(row["kind"], p)
+        await db.set_test(lid, res.ok, res.note)
+        if res.ok:
+            ok += 1
+        else:
+            rotte += 1
+            await db.mark_broken(lid)
+        if n % 10 == 0:
+            try:
+                await msg.edit_text(f"Test {n}/{len(ids)} — funzionanti {ok}, rotte {rotte}")
+            except Exception:
+                pass
+    try:
+        await msg.edit_text(f"Test finito: {ok} funzionanti, {rotte} rotte su {len(ids)}.\n"
+                            f"Le rotte sono state escluse dal pool.")
+    except Exception:
+        pass
+
+
+@admin_router.callback_query(F.data.startswith("a:bok:"))
+async def bulk_confirm(cb: CallbackQuery, state: FSMContext):
+    items = BULK.pop(cb.data.split(":")[2], None)
+    await state.clear()
+    if not items:
+        return await cb.answer("Riepilogo scaduto", show_alert=True)
+    await cb.message.edit_text("Salvo le liste...")
+    ids = []
+    for it in items:
+        lid = await db.add_list(it["kind"], it["payload"], it.get("label") or "-", cb.from_user.id)
+        ids.append(lid)
+    await db.log(cb.from_user.id, "bulk_add", str(len(ids)))
+    await cb.message.edit_text(f"Salvate {len(ids)} liste. Test in corso...")
+    asyncio.create_task(_bulk_test(cb.message, ids))
+    await cb.answer()
+
+
 @admin_router.callback_query(F.data == "a:cancel")
 async def add_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -553,11 +649,56 @@ async def free_cmd(msg: Message, state: FSMContext):
 
 @admin_router.callback_query(F.data == "a:free")
 async def cb_free(cb: CallbackQuery):
-    rows = await db.free_lists()
-    txt = ("Nessuna lista libera." if not rows else
-           "Liste libere:\n\n" + "\n".join(
-               f"#{r['id']} - {r['kind']} - {r['label'] or '-'}" for r in rows))
-    await cb.message.edit_text(txt, reply_markup=kb.back())
+    await cb.message.edit_text("Quali liste libere vuoi vedere?", reply_markup=kb.free_kinds())
+    await cb.answer()
+
+
+async def _show_free(cb, kind, page):
+    per_page = 5
+    tot = await db.count_free_kind(kind)
+    if not tot:
+        await cb.message.edit_text("Nessuna lista libera di questo tipo.", reply_markup=kb.back())
+        return
+    righe = await db.free_lists_kind(kind, page * per_page, per_page)
+    blocchi = []
+    for r in righe:
+        p = await db.payload_of(r)
+        if r["kind"] == "xtream":
+            corpo = (f"<b>#{r['id']} XTREAM</b>\nServer: <code>{p['server']}</code>\n"
+                     f"User: <code>{p['username']}</code>\nPass: <code>{p['password']}</code>\n"
+                     f"M3U: <code>{p['server']}/get.php?username={p['username']}"
+                     f"&password={p['password']}&type=m3u_plus</code>")
+        elif r["kind"] == "stalker":
+            corpo = (f"<b>#{r['id']} STALKER</b>\nPortal: <code>{p['portal']}</code>\n"
+                     f"MAC: <code>{p['mac']}</code>")
+        else:
+            corpo = f"<b>#{r['id']} M3U</b>\n<code>{p['url']}</code>"
+        blocchi.append(corpo)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"a:fp:{kind or 'all'}:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{(tot - 1) // per_page + 1}",
+                                    callback_data="a:noop"))
+    if (page + 1) * per_page < tot:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:fp:{kind or 'all'}:{page + 1}"))
+    await cb.message.edit_text("\n\n".join(blocchi),
+                               reply_markup=InlineKeyboardMarkup(
+                                   inline_keyboard=[nav, [InlineKeyboardButton(text="⬅️ Menu",
+                                                                               callback_data="a:menu")]]))
+
+
+@admin_router.callback_query(F.data.in_({"a:freem3u", "a:freextream", "a:freestalker", "a:freeall"}))
+async def cb_free_kind(cb: CallbackQuery):
+    kind = {"a:freem3u": "m3u", "a:freextream": "xtream",
+            "a:freestalker": "stalker", "a:freeall": None}[cb.data]
+    await _show_free(cb, kind, 0)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:fp:"))
+async def cb_free_page(cb: CallbackQuery):
+    _, _, k, page = cb.data.split(":")
+    await _show_free(cb, None if k == "all" else k, int(page))
     await cb.answer()
 
 
