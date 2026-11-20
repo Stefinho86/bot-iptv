@@ -109,11 +109,50 @@ async def set_setting(key, value):
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
 
 
-async def is_admin(uid):
+_NAMES_OK = False
+
+
+async def _ensure_names():
+    global _NAMES_OK
+    if _NAMES_OK:
+        return
+    async with _pool.acquire() as c:
+        await c.execute("CREATE TABLE IF NOT EXISTS admin_names("
+                        "username TEXT PRIMARY KEY, added_by BIGINT, added_at TIMESTAMPTZ)")
+    _NAMES_OK = True
+
+
+async def is_admin(uid, username=None):
     if uid in config.SUPER_ADMINS:
         return True
+    await _ensure_names()
     async with _pool.acquire() as c:
-        return await c.fetchval("SELECT 1 FROM admins WHERE user_id=$1", uid) is not None
+        if await c.fetchval("SELECT 1 FROM admins WHERE user_id=$1", uid) is not None:
+            return True
+        if username:
+            return await c.fetchval(
+                "SELECT 1 FROM admin_names WHERE lower(username)=lower($1)", username) is not None
+    return False
+
+
+async def add_admin_name(username, by):
+    await _ensure_names()
+    async with _pool.acquire() as c:
+        await c.execute("INSERT INTO admin_names(username,added_by,added_at) VALUES($1,$2,$3) "
+                        "ON CONFLICT(username) DO NOTHING", username.lstrip("@"), by, now())
+
+
+async def del_admin_name(username):
+    await _ensure_names()
+    async with _pool.acquire() as c:
+        await c.execute("DELETE FROM admin_names WHERE lower(username)=lower($1)",
+                        username.lstrip("@"))
+
+
+async def list_admin_names():
+    await _ensure_names()
+    async with _pool.acquire() as c:
+        return await c.fetch("SELECT username FROM admin_names ORDER BY added_at")
 
 
 async def add_admin(uid, username, by):
