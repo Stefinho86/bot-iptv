@@ -136,6 +136,7 @@ def kinds():
         [B(text="🔗 Link M3U", callback_data="a:k:m3u")],
         [B(text="🌐 Xtream Codes", callback_data="a:k:xtream")],
         [B(text="📡 Stalker Portal", callback_data="a:k:stalker")],
+        [B(text="📷 Aggiungi foto/txt", callback_data="a:k:bulk")],
         [B(text="⬅️ Indietro", callback_data="a:menu")],
     ])
 
