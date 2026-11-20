@@ -63,8 +63,14 @@ HEAD = {"User-Agent": UA, "Accept": "*/*"}
 
 
 def _base(url):
-    m = re.match(r"(https?://[^/\s]+)", url)
-    return m.group(1) if m else url
+    m = re.match(r"(https?://)([^/\s]+)", url)
+    if not m:
+        return url
+    scheme, netloc = m.group(1), m.group(2)
+    u = re.match(r"https?://([^/@\s]+)@", url)
+    if u:
+        return scheme + u.group(1) + netloc
+    return scheme + netloc
 
 
 def _xtream(host, user, pwd):
@@ -177,22 +183,32 @@ async def _test_m3u(session, p):
     return Result(False, "nessuno stream riproducibile")
 
 
-async def _test_xtream(session, p):
+async def _test_xtream(session, p: dict) -> Result:
     q = f"username={p['username']}&password={p['password']}"
-    st, body = await _get(session, f"{p['server']}/player_api.php?{q}")
-    if st >= 400:
-        return Result(False, f"HTTP {st}")
-    try:
-        j = json.loads(body)
-    except Exception:
-        return Result(False, "host errato o risposta non valida")
+    j = None
+    base = p["server"]
+    ultimo = "host non raggiungibile"
+    for srv in [p["server"], *(p.get("alts") or [])]:
+        st, body = await _get(session, f"{srv}/player_api.php?{q}")
+        if st >= 400:
+            ultimo = f"HTTP {st} su {srv}"
+            continue
+        try:
+            j = json.loads(body)
+        except Exception:
+            ultimo = f"risposta non valida da {srv}"
+            continue
+        base = srv
+        break
+    if j is None:
+        return Result(False, ultimo)    
     ui = j.get("user_info") or {}
     if ui.get("auth") in (0, False):
         return Result(False, "credenziali rifiutate")
     if str(ui.get("status", "")).lower() not in ("active", "1", "true"):
         return Result(False, f"stato {ui.get('status')}")
     info = f"scadenza {ui.get('exp_date') or '-'}"
-    st, body = await _get(session, f"{p['server']}/player_api.php?{q}&action=get_live_streams", timeout=30)
+    st, body = await _get(session, f"{base}/player_api.php?{q}&action=get_live_streams", timeout=30)
     try:
         chans = json.loads(body)
     except Exception:
@@ -260,11 +276,34 @@ def detect_many(text):
             return
         seen.add(key)
         items.append(it)
-
+        
+srv_host = None
+    if len(re.findall(r"(?:^|\n)\s*server\s*:", text, re.I)) == 1:
+        m2 = re.search(r"(?:^|\n)\s*server\s*:\s*(?:https?://)?([a-z0-9.\-]+\.[a-z]{2,})"
+                       r"(?::(\d{2,5}))?", text, re.I)
+        if m2:
+            srv_host = (m2.group(1), m2.group(2))
+    
     for m in GETPHP.finditer(text):
-        server = _base(m.group(0))
+        raw = m.group(0)
+        server = _base(raw)
+        alts = []
+        net = re.match(r"(https?://)([^/\s]+)", raw)
+        if net:
+            scheme, netloc = net.group(1), net.group(2)
+            host, port = (netloc.rpartition(":")[0], netloc.rpartition(":")[2]) \
+                if ":" in netloc else (netloc, "")
+            host = host.rsplit("@", 1)[-1]
+            if srv_host:
+                srv = f"{scheme}{srv_host[0]}:{srv_host[1] or port or 80}"
+                if srv != server:
+                    alts.append(server)
+                server = srv
+            elif "@" in netloc:
+                alts.append(f"{scheme}{netloc.split('@', 1)[1]}")
         add({"kind": "xtream", "label": f"{server} · {m.group(1)}",
-             "payload": {"server": server, "username": m.group(1), "password": m.group(2)}})
+             "payload": {"server": server, "username": m.group(1),
+                         "password": m.group(2), "alts": alts}})
 
     for m in URL.finditer(text):
         u = m.group(0).rstrip(".,;)")
