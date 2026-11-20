@@ -158,30 +158,19 @@ def user_row(uid, banned):
               callback_data=f"u:{'unban' if banned else 'ban'}:{uid}")]
 
 
-_MEMBER_CACHE = {}
-POS_TTL = 300
-NEG_TTL = 60
-
-
 async def member_ok(bot, uid):
     if await db.get_int("group_only") == 0:
         return True
     gid = await db.get_group_id()
     if gid == 0:
         return False
-    now = time.time()
-    hit = _MEMBER_CACHE.get(uid)
-    if hit and now - hit[0] < hit[1]:
-        return hit[2]
     try:
         m = await bot.get_chat_member(gid, uid)
-        ok = m.status in ("creator", "administrator", "member") or (
-            m.status == "restricted" and getattr(m, "is_member", False))
     except Exception:
-        ok = False
-    _MEMBER_CACHE[uid] = (now, POS_TTL if ok else NEG_TTL, ok)
-    return ok
-
+        return False
+    if m.status in ("creator", "administrator", "member"):
+        return True
+    return bool(m.status == "restricted" and getattr(m, "is_member", False))
 
 async def not_member_text():
     txt = await db.get_setting("not_member")
