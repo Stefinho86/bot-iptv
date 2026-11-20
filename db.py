@@ -37,6 +37,10 @@ DEFAULTS = {
     "enabled": "1",
     "send_proof": "1",
     "max_attempts": "6",
+    "group_id": "0",
+    "group_only": "1",
+    "group_link": "",
+    "not_member": "Per usare questo bot devi essere membro del gruppo ufficiale. Entra nel gruppo, poi riprova con /start.",
     "welcome": "Ciao {name}!\n\nPremi il pulsante per ricevere una lista IPTV. Una lista ogni {days} giorni.",
     "deny_text": "Hai gia ricevuto una lista. Potrai richiederne un'altra <b>{when}</b> (tra {left}).",
     "no_lists": "Al momento non ci sono liste disponibili. Riprova piu tardi.",
@@ -83,6 +87,16 @@ async def get_int(key):
         return int(await get_setting(key))
     except ValueError:
         return int(DEFAULTS.get(key, "0"))
+
+
+async def get_group_id():
+    raw = (await get_setting("group_id") or "").strip()
+    if raw and raw != "0":
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return config.GROUP_ID
 
 
 async def set_setting(key, value):
