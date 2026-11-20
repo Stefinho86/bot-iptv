@@ -26,6 +26,10 @@ class Trigger(BaseFilter):
                         return True
         return False
 
+class NotCommand(BaseFilter):
+    async def __call__(self, message: Message) -> bool:
+        t = message.text or message.caption or ""
+        return not t.startswith("/")
 
 def user_kb(days):
     return K(inline_keyboard=[[B(text="Ricevi una lista", callback_data="u:get")]])
