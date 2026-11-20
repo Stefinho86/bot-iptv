@@ -67,9 +67,9 @@ def _base(url):
     if not m:
         return url
     scheme, netloc = m.group(1), m.group(2)
-    u = re.match(r"https?://([^/@\s]+)@", url)
-    if u:
-        return scheme + u.group(1) + netloc
+    if "@" in netloc:
+        u, h = netloc.split("@", 1)
+        return scheme + u + h
     return scheme + netloc
 
 
@@ -279,9 +279,10 @@ def detect_many(text):
         items.append(it)
 
     srv_host = None
-    if len(re.findall(r"(?:^|\n)\s*server\s*:", text, re.I)) == 1:
-        m2 = re.search(r"(?:^|\n)\s*server\s*:\s*(?:https?://)?([a-z0-9.\-]+\.[a-z]{2,})"
-                       r"(?::(\d{2,5}))?", text, re.I)
+    srv_pat = (r"(?:^|\n)[^\w\n]{0,4}\s*server\s*:\s*(?:https?://)?"
+               r"([a-z0-9.\-]+\.[a-z]{2,})(?::(\d{2,5}))?")
+    if len(re.findall(srv_pat, text, re.I)) == 1:
+        m2 = re.search(srv_pat, text, re.I)
         if m2:
             srv_host = (m2.group(1), m2.group(2))
 
