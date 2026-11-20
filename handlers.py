@@ -1164,7 +1164,8 @@ async def cb_banned(cb: CallbackQuery):
 
 async def _show_admins(cb):
     righe = await db.all_admins()
-    if not righe:
+    nomi = await db.list_admin_names()
+    if not righe and not nomi:
         await cb.message.edit_text("Nessun admin aggiuntivo, solo i super-admin.",
                                    reply_markup=kb.back())
         return
@@ -1175,8 +1176,14 @@ async def _show_admins(cb):
             InlineKeyboardButton(text=f"🛡 {nome}", callback_data="a:noop"),
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmadmin:{r['user_id']}"),
         ])
+    for r in nomi:
+        nome = r["username"][:24]
+        tastiera.append([
+            InlineKeyboardButton(text=f"🛡 @{nome}", callback_data="a:noop"),
+            InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmname:{nome}"),
+        ])
     tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
-    await cb.message.edit_text(f"Amministratori: {len(righe)}",
+    await cb.message.edit_text(f"Amministratori: {len(righe) + len(nomi)}",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
@@ -1192,6 +1199,14 @@ async def cb_rmadmin(cb: CallbackQuery):
     await db.del_admin(uid)
     await db.clear_anon_by_user(uid)
     await db.log(cb.from_user.id, "admin_del", str(uid))
+    await _show_admins(cb)
+    await cb.answer("Rimosso")
+
+@admin_router.callback_query(F.data.startswith("a:rmname:"))
+async def cb_rmname(cb: CallbackQuery):
+    nome = cb.data.split(":", 2)[2]
+    await db.del_admin_name(nome)
+    await db.log(cb.from_user.id, "admin_del_name", nome)
     await _show_admins(cb)
     await cb.answer("Rimosso")
 
