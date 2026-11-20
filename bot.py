@@ -122,7 +122,8 @@ async def _get(url, proxy=None, etichetta=""):
         kw = {}
         if proxy and not proxy.startswith("socks"):
             kw["proxy"] = proxy
-        async with aiohttp.ClientSession(connector=conn, timeout=TIMEOUT) as s:
+        async with aiohttp.ClientSession(
+                connector=conn, timeout=aiohttp.ClientTimeout(total=20, connect=8)) as s:
             async with s.get(url, **kw) as r:
                 corpo = (await r.text())[:90]
                 print(f"   {etichetta}: HTTP {r.status} {corpo}")
