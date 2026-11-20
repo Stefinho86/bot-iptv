@@ -251,7 +251,8 @@ async def comandi_cmd(msg: Message, state: FSMContext):
         "/toggle - accendi o spegni\n"
         "/esporta - esporta le liste libere\n"
         "/annulla - interrompi\n\n"
-        "Tutti accettano ID, @username o inoltro. Se lanci un comando da solo, il bot chiede cosa gli serve.",
+        "Tutti accettano ID, @username o inoltro. Se lanci un comando da solo, "
+        "il bot chiede cosa gli serve.",
         reply_markup=kb.back())
 
 
@@ -268,6 +269,55 @@ async def cb_stats(cb: CallbackQuery):
     await cb.message.edit_text(
         f"Libere: {s['free']}\nAssegnate: {s['assigned']}\nRotte: {s['broken']}\n"
         f"Utenti: {s['users']}\nBannati: {s['banned']}", reply_markup=kb.back())
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "a:comandi")
+async def cb_comandi(cb: CallbackQuery, state: FSMContext):
+    await comandi_cmd(cb.message, state)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "a:users")
+async def cb_users(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="utenti")
+    await cb.message.answer("Chi vuoi cercare? Mandami ID o @username." + HINT)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "a:revoca")
+async def cb_revoca(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="revoca")
+    await cb.message.answer("Quale assegnazione vuoi revocare? Mandami il numero "
+                            "(lo trovi in Assegnazioni)." + HINT)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "a:admin_add")
+async def cb_admin_add(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="admin_add")
+    await cb.message.answer("Chi vuoi aggiungere come amministratore? Mandami ID, @username "
+                            "o inoltra un suo messaggio." + HINT)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "a:admin_del")
+async def cb_admin_del(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="admin_del")
+    await cb.message.answer("Chi vuoi rimuovere dagli amministratori? Mandami ID, @username "
+                            "o inoltra un suo messaggio." + HINT)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "a:toggle")
+async def cb_toggle(cb: CallbackQuery):
+    cur = await db.get_int("enabled")
+    await db.set_setting("enabled", "0" if cur else "1")
+    await cb.message.edit_text(f"Bot {'SPENTO' if cur else 'ATTIVO'}.", reply_markup=kb.admin_menu())
     await cb.answer()
 
 
@@ -373,7 +423,8 @@ async def free_cmd(msg: Message, state: FSMContext):
     await state.clear()
     rows = await db.free_lists()
     if not rows:
-        return await msg.answer("Nessuna lista libera. Inseriscine una con /aggiungi.", reply_markup=kb.back())
+        return await msg.answer("Nessuna lista libera. Inseriscine una con /aggiungi.",
+                                reply_markup=kb.back())
     txt = "\n".join(f"#{r['id']} - {r['kind']} - {r['label'] or '-'}" for r in rows)
     await msg.answer(f"Liste libere:\n\n{txt}", reply_markup=kb.back())
 
@@ -432,10 +483,12 @@ async def revoca_cmd(msg: Message, state: FSMContext):
     p = msg.text.split(maxsplit=1)
     if len(p) > 1:
         row = await db.revoke(int(p[1])) if p[1].isdigit() else None
-        return await msg.answer("Revocata." if row else "ID assegnazione non valido.", reply_markup=kb.back())
+        return await msg.answer("Revocata." if row else "ID assegnazione non valido.",
+                                reply_markup=kb.back())
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
-    await msg.answer("Quale assegnazione vuoi revocare? Mandami il numero (lo trovi con /assegnazioni)." + HINT)
+    await msg.answer("Quale assegnazione vuoi revocare? Mandami il numero "
+                     "(lo trovi con /assegnazioni)." + HINT)
 
 
 # ==================== UTENTI ====================
@@ -525,7 +578,8 @@ async def reset_cmd(msg: Message, state: FSMContext):
         return await msg.answer(f"Attesa azzerata per {uid}.", reply_markup=kb.back())
     await state.set_state(Ask.wait)
     await state.update_data(action="reset")
-    await msg.answer("A chi vuoi azzerare l'attesa? Mandami ID, @username o inoltra un suo messaggio." + HINT)
+    await msg.answer("A chi vuoi azzerare l'attesa? Mandami ID, @username "
+                     "o inoltra un suo messaggio." + HINT)
 
 
 # ==================== AMMINISTRATORI ====================
@@ -583,8 +637,8 @@ async def cooldown_cmd(msg: Message, state: FSMContext):
         return await msg.answer(f"Attesa impostata a {p[1]} giorni.", reply_markup=kb.back())
     await state.set_state(Ask.wait)
     await state.update_data(action="cooldown")
-    await msg.answer("Da quante ore... pardon, da quanti giorni vuoi che sia l'attesa tra una lista "
-                     "e l'altra? Mandami un numero." + HINT)
+    await msg.answer("Da quanti giorni vuoi che sia l'attesa tra una lista e l'altra? "
+                     "Mandami un numero." + HINT)
 
 
 @admin_router.message(Command("setgroup"))
@@ -601,8 +655,8 @@ async def setgroup_cmd(msg: Message, state: FSMContext):
                                 f"Ora solo i membri possono usare il bot.")
     await state.set_state(Ask.wait)
     await state.update_data(action="setgroup")
-    await msg.answer("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi /setgroup "
-                     "dentro il gruppo." + HINT)
+    await msg.answer("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
+                     "/setgroup dentro il gruppo." + HINT)
 
 
 @admin_router.message(Command("setlink"))
@@ -628,7 +682,8 @@ async def toggle_cmd(msg: Message, state: FSMContext):
 
 async def _settings_kb():
     return kb.settings_kb(await db.get_int("cooldown_days"), await db.get_int("send_proof"),
-                          await db.get_int("enabled"), await db.get_int("group_only"))
+                          await db.get_int("enabled"), await db.get_int("group_only"),
+                          await db.get_setting("group_id"))
 
 
 @admin_router.callback_query(F.data == "a:set")
@@ -662,8 +717,27 @@ async def s_toggle(cb: CallbackQuery):
 
 
 @admin_router.callback_query(F.data == "s:cool")
-async def s_cool(cb: CallbackQuery):
-    await cb.message.answer("Scrivi /cooldown seguito dal numero di giorni.")
+async def s_cool(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="cooldown")
+    await cb.message.answer("Da quanti giorni vuoi che sia l'attesa tra una lista e l'altra?" + HINT)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "s:group")
+async def s_group(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="setgroup")
+    await cb.message.answer("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
+                            "/setgroup dentro il gruppo." + HINT)
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data == "s:link")
+async def s_link(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(Ask.wait)
+    await state.update_data(action="setlink")
+    await cb.message.answer("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT)
     await cb.answer()
 
 
@@ -808,3 +882,14 @@ async def ask_input(msg: Message, state: FSMContext):
 
     await state.clear()
     await msg.answer(testo, reply_markup=kb.back())
+
+
+# ==================== PARACADUTE ====================
+@admin_router.callback_query(F.data.startswith("a:"))
+async def cb_fallback_a(cb: CallbackQuery):
+    await cb.answer("Azione non disponibile, riapri il pannello con /admin")
+
+
+@admin_router.callback_query(F.data.startswith("s:"))
+async def cb_fallback_s(cb: CallbackQuery):
+    await cb.answer("Azione non disponibile, riapri le impostazioni con /admin")
