@@ -15,7 +15,7 @@ from aiogram.types import (Message, CallbackQuery, FSInputFile,
 import db
 import config
 import utils as kb
-from services import detect, detect_many, preview, test_list
+from services import detect, detect_many, ocr_bytes, preview, test_list
 from utils import IsAdmin, Trigger, NotCommand, AnonUnverified
 
 admin_router = Router()
