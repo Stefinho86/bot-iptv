@@ -4,6 +4,7 @@ import os
 import socket
 import ssl
 import time
+import traceback
 
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -145,16 +146,23 @@ async def _registra_comandi(bot):
 
 
 async def run_once():
+    print("PASSO 1: database")
     await db.init()
 
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
-    if proxy:
-        print(f"Proxy configurato: {proxy}")
+    print(f"PASSO 2: sessione (proxy={'si' if proxy else 'no'})")
+    try:
+        session = nuova_sessione(proxy)
+    except Exception as e:
+        print(f"Sessione con proxy fallita ({type(e).__name__}: {e}), uso la standard")
+        proxy = None
+        session = AiohttpSession()
 
-    session = nuova_sessione(proxy)
+    print("PASSO 3: bot")
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
+    print("PASSO 4: controllo rete")
     if not await _attendi_rete(bot, proxy):
         try:
             await bot.session.close()
@@ -163,6 +171,7 @@ async def run_once():
         await db.close()
         return
 
+    print("PASSO 5: dispatcher")
     dp = build_dispatcher()
 
     try:
@@ -172,6 +181,7 @@ async def run_once():
 
     asyncio.create_task(_registra_comandi(bot))
 
+    print("PASSO 6: polling")
     try:
         await dp.start_polling(bot)
     finally:
@@ -190,6 +200,7 @@ async def supervisor():
             await run_once()
         except Exception as e:
             print(f"Crash: {type(e).__name__}: {e}")
+            traceback.print_exc()
         print("Riavvio interno tra 15 secondi")
         await asyncio.sleep(15)
 
