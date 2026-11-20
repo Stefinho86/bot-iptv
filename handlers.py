@@ -29,6 +29,7 @@ user_router = Router()
 BUSY = set()
 TMP = {}
 BULK = {}
+DSEL = {}
 
 HINT = "\n\nScrivi /annulla per interrompere."
 
@@ -812,7 +813,8 @@ async def _show_free(cb, kind, page):
         return
     inizio = page * per_page
     righe = await db.free_lists_kind(kind, inizio, per_page)
-    blocchi = []
+    sel = DSEL.setdefault(cb.from_user.id, set())
+    blocchi, bottoni = [], []
     for n, r in enumerate(righe, inizio + 1):
         p = await db.payload_of(r)
         if r["kind"] == "xtream":
@@ -820,12 +822,19 @@ async def _show_free(cb, kind, page):
                      f"User: <code>{p['username']}</code>\nPass: <code>{p['password']}</code>\n"
                      f"M3U: <code>{p['server']}/get.php?username={p['username']}"
                      f"&password={p['password']}&type=m3u_plus</code>")
+            etichetta = p.get("username") or "xtream"
         elif r["kind"] == "stalker":
             corpo = (f"<b>#{n} STALKER</b>\nPortal: <code>{p['portal']}</code>\n"
                      f"MAC: <code>{p['mac']}</code>")
+            etichetta = p.get("mac") or "stalker"
         else:
             corpo = f"<b>#{n} M3U</b>\n<code>{p['url']}</code>"
+            etichetta = p.get("url") or "m3u"
         blocchi.append(corpo)
+        segno = "✅" if r["id"] in sel else "🗑"
+        bottoni.append([InlineKeyboardButton(
+            text=f"{segno} #{n} {etichetta[:28]}",
+            callback_data=f"a:dtg:{r['id']}:{kind or 'all'}:{page}")])
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton(text="◀️", callback_data=f"a:fp:{kind or 'all'}:{page - 1}"))
@@ -833,10 +842,14 @@ async def _show_free(cb, kind, page):
                                     callback_data="a:noop"))
     if (page + 1) * per_page < tot:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:fp:{kind or 'all'}:{page + 1}"))
+    coda = []
+    if sel:
+        coda.append([InlineKeyboardButton(text=f"🗑 ELIMINA SELEZIONATE ({len(sel)})",
+                                          callback_data=f"a:ddel:{kind or 'all'}:{page}")])
+    coda.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
     await cb.message.edit_text("\n\n".join(blocchi),
                                reply_markup=InlineKeyboardMarkup(
-                                   inline_keyboard=[nav, [InlineKeyboardButton(text="⬅️ Menu",
-                                                                               callback_data="a:menu")]]))
+                                   inline_keyboard=[nav] + bottoni + coda))
 
 @admin_router.callback_query(F.data.in_({"a:freem3u", "a:freextream", "a:freestalker", "a:freeall"}))
 async def cb_free_kind(cb: CallbackQuery):
@@ -852,6 +865,32 @@ async def cb_free_page(cb: CallbackQuery):
     await _show_free(cb, None if k == "all" else k, int(page))
     await cb.answer()
 
+@admin_router.callback_query(F.data.startswith("a:dtg:"))
+async def cb_del_toggle(cb: CallbackQuery):
+    _, _, lid, kind, page = cb.data.split(":")
+    sel = DSEL.setdefault(cb.from_user.id, set())
+    if int(lid) in sel:
+        sel.discard(int(lid))
+    else:
+        sel.add(int(lid))
+    await _show_free(cb, None if kind == "all" else kind, int(page))
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:ddel:"))
+async def cb_del_selected(cb: CallbackQuery):
+    _, _, kind, page = cb.data.split(":")
+    sel = DSEL.get(cb.from_user.id, set())
+    if not sel:
+        return await cb.answer("Nessuna lista selezionata", show_alert=True)
+    fatte = 0
+    for lid in list(sel):
+        if await db.del_list(lid):
+            fatte += 1
+    DSEL[cb.from_user.id] = set()
+    await db.log(cb.from_user.id, "del_lists", str(fatte))
+    await _show_free(cb, None if kind == "all" else kind, int(page))
+    await cb.answer(f"Eliminate {fatte}")
 
 @admin_router.message(Command("assegnazioni"))
 async def hist_cmd(msg: Message, state: FSMContext):
