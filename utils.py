@@ -113,10 +113,21 @@ def admin_menu():
         [B(text="📇 Elenco utenti", callback_data="a:allusers"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
         [B(text="🚫 Utenti bannati", callback_data="a:banned")],
         [B(text="➕ Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
+        [B(text="🔁 Reset attesa", callback_data="a:reset"), B(text="⏳ Cooldown", callback_data="s:cool")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
         [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
         [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="🩺 Stato", callback_data="a:stato")],
         [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
+    ])
+
+
+def free_kinds():
+    return K(inline_keyboard=[
+        [B(text="🔗 Solo M3U", callback_data="a:freem3u")],
+        [B(text="🌐 Solo Xtream", callback_data="a:freextream")],
+        [B(text="📡 Solo Stalker", callback_data="a:freestalker")],
+        [B(text="📚 Tutte", callback_data="a:freeall")],
+        [B(text="⬅️ Menu", callback_data="a:menu")],
     ])
 
 
