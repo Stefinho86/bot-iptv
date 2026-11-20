@@ -295,3 +295,19 @@ async def ensure_user(uid):
     async with _pool.acquire() as c:
         await c.execute("INSERT INTO users(user_id,first_seen) VALUES($1,$2) "
                         "ON CONFLICT(user_id) DO NOTHING", uid, now())
+
+async def all_users(offset, limit):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT user_id, username, full_name, banned FROM users "
+            "ORDER BY first_seen DESC OFFSET $1 LIMIT $2", offset, limit)
+
+
+async def count_users():
+    async with _pool.acquire() as c:
+        return await c.fetchval("SELECT COUNT(*) FROM users")
+
+
+async def all_admins():
+    async with _pool.acquire() as c:
+        return await c.fetch("SELECT user_id, username FROM admins ORDER BY added_at")
