@@ -799,20 +799,21 @@ async def _show_free(cb, kind, page):
     if not tot:
         await cb.message.edit_text("Nessuna lista libera di questo tipo.", reply_markup=kb.back())
         return
-    righe = await db.free_lists_kind(kind, page * per_page, per_page)
+    inizio = page * per_page
+    righe = await db.free_lists_kind(kind, inizio, per_page)
     blocchi = []
-    for r in righe:
+    for n, r in enumerate(righe, inizio + 1):
         p = await db.payload_of(r)
         if r["kind"] == "xtream":
-            corpo = (f"<b>#{r['id']} XTREAM</b>\nServer: <code>{p['server']}</code>\n"
+            corpo = (f"<b>#{n} XTREAM</b>\nServer: <code>{p['server']}</code>\n"
                      f"User: <code>{p['username']}</code>\nPass: <code>{p['password']}</code>\n"
                      f"M3U: <code>{p['server']}/get.php?username={p['username']}"
                      f"&password={p['password']}&type=m3u_plus</code>")
         elif r["kind"] == "stalker":
-            corpo = (f"<b>#{r['id']} STALKER</b>\nPortal: <code>{p['portal']}</code>\n"
+            corpo = (f"<b>#{n} STALKER</b>\nPortal: <code>{p['portal']}</code>\n"
                      f"MAC: <code>{p['mac']}</code>")
         else:
-            corpo = f"<b>#{r['id']} M3U</b>\n<code>{p['url']}</code>"
+            corpo = f"<b>#{n} M3U</b>\n<code>{p['url']}</code>"
         blocchi.append(corpo)
     nav = []
     if page > 0:
@@ -825,7 +826,6 @@ async def _show_free(cb, kind, page):
                                reply_markup=InlineKeyboardMarkup(
                                    inline_keyboard=[nav, [InlineKeyboardButton(text="⬅️ Menu",
                                                                                callback_data="a:menu")]]))
-
 
 @admin_router.callback_query(F.data.in_({"a:freem3u", "a:freextream", "a:freestalker", "a:freeall"}))
 async def cb_free_kind(cb: CallbackQuery):
