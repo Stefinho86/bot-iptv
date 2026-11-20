@@ -46,6 +46,8 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="comandi", description="Elenco comandi"),
 ]
 
+TIMEOUT = aiohttp.ClientTimeout(total=20, connect=8)
+
 
 def make_connector(conn_proxy):
     if conn_proxy and conn_proxy.startswith("socks"):
@@ -66,7 +68,7 @@ AiohttpSession.proxy = property(
 
 
 def nuova_sessione(proxy):
-    session = AiohttpSession()
+    session = AiohttpSession(timeout=TIMEOUT)
     if proxy and proxy.startswith("socks"):
         session._conn_proxy = proxy
         session.proxy = None
@@ -102,40 +104,42 @@ def build_dispatcher() -> Dispatcher:
     return dp
 
 
-async def _diag(proxy):
+async def _tcp_ok():
     try:
-        a = [x[4][0] for x in socket.getaddrinfo("api.telegram.org", 443, socket.AF_INET)]
-        print(f"DNS IPv4: {a[:3]}")
+        r, w = await asyncio.wait_for(asyncio.open_connection("149.154.167.220", 443), 6)
+        w.close()
+        return True
     except Exception as e:
-        print(f"DNS IPv4 fallito: {repr(e)}")
+        print(f"TCP diretto 149.154.167.220:443 fallito ({type(e).__name__})")
+        return False
+
+
+async def _probe(proxy):
+    etichetta = f"proxy {proxy}" if proxy else "diretto"
     try:
         conn = make_connector(proxy)
         kw = {}
         if proxy and not proxy.startswith("socks"):
             kw["proxy"] = proxy
-        async with aiohttp.ClientSession(
-                connector=conn, timeout=aiohttp.ClientTimeout(total=20)) as s:
+        async with aiohttp.ClientSession(connector=conn, timeout=TIMEOUT) as s:
             async with s.get(f"https://api.telegram.org/bot{config.BOT_TOKEN}/getMe", **kw) as r:
-                print(f"GET getMe -> {r.status}: {(await r.text())[:150]}")
-                return True
+                corpo = await r.text()
+                print(f"PROVA {etichetta}: HTTP {r.status} {corpo[:100]}")
+                return r.status == 200
     except Exception as e:
-        print(f"GET getMe fallita: {repr(e)}")
-    if not proxy:
-        print("SENZA PROXY NON PASSA: imposta PROXY_URL (http://IP:PORTA)")
-    return False
+        print(f"PROVA {etichetta}: fallita ({type(e).__name__}: {e})")
+        return False
 
 
-async def _attendi_rete(bot, proxy) -> bool:
-    await _diag(proxy)
-    for i in range(1, 11):
+async def _attendi_rete(bot) -> bool:
+    for i in range(1, 4):
         try:
             me = await bot.me()
             print(f"Avviato come @{me.username}")
             return True
         except Exception as e:
-            print(f"Telegram non raggiungibile ({type(e).__name__}), tentativo {i}/10")
-            await asyncio.sleep(6)
-    print("RETE BLOCCATA: api.telegram.org non risponde.")
+            print(f"Telegram non raggiungibile ({type(e).__name__}), tentativo {i}/3")
+            await asyncio.sleep(5)
     return False
 
 
@@ -153,24 +157,38 @@ async def _registra_comandi(bot):
             return
         except Exception as e:
             print(f"Registrazione comandi fallita ({type(e).__name__}), tentativo {tentativo}/3")
-            await asyncio.sleep(20 * tentativo)
-    print("Comandi non registrati, usa /setcommands su BotFather")
+            await asyncio.sleep(15 * tentativo)
 
 
 async def run_once():
-    print("PASSO 1: database")
     await db.init()
-
     proxy = (os.getenv("PROXY_URL") or "").strip() or None
-    print(f"PASSO 2: sessione (proxy={'si' if proxy else 'no'})")
-    session = nuova_sessione(proxy)
+    if proxy:
+        print(f"Proxy configurato: {proxy}")
 
-    print("PASSO 3: bot")
+    print("Verifica via diretta")
+    tcp = await _tcp_ok()
+    diretto = await _probe(None) if tcp else False
+
+    via_proxy = False
+    if proxy and not diretto:
+        via_proxy = await _probe(proxy)
+
+    if not diretto and not via_proxy:
+        print("=== NESSUNA VIA VERSO TELEGRAM ===")
+        if not proxy:
+            print("Imposta PROXY_URL con un proxy http:// funzionante")
+        else:
+            print("Il proxy configurato non funziona: cambialo")
+        await db.close()
+        return
+
+    print("Via scelta: " + ("proxy" if via_proxy else "diretta"))
+    session = nuova_sessione(proxy if via_proxy else None)
     bot = Bot(config.BOT_TOKEN, session=session,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
-    print("PASSO 4: controllo rete")
-    if not await _attendi_rete(bot, proxy):
+    if not await _attendi_rete(bot):
         try:
             await bot.session.close()
         except Exception:
@@ -178,7 +196,6 @@ async def run_once():
         await db.close()
         return
 
-    print("PASSO 5: dispatcher")
     dp = build_dispatcher()
 
     try:
@@ -188,7 +205,7 @@ async def run_once():
 
     asyncio.create_task(_registra_comandi(bot))
 
-    print("PASSO 6: polling")
+    print("POLLING ATTIVO")
     try:
         await dp.start_polling(bot)
     finally:
@@ -208,8 +225,8 @@ async def supervisor():
         except Exception as e:
             print(f"Crash: {type(e).__name__}: {e}")
             traceback.print_exc()
-        print("Riavvio interno tra 15 secondi")
-        await asyncio.sleep(15)
+        print("Nuovo tentativo tra 10 secondi")
+        await asyncio.sleep(10)
 
 
 if __name__ == "__main__":
