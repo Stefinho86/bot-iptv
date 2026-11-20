@@ -109,6 +109,24 @@ async def _need_target(msg):
                      "oppure inoltra un suo messaggio." + HINT)
 
 
+async def _stato_text(msg, bot):
+    gid = await db.get_group_id()
+    gonly = await db.get_int("group_only")
+    en = await db.get_int("enabled")
+    if msg.from_user.id == kb.ANON_ID:
+        who = await db.get_anon_verified(msg.chat.id)
+        tu = f"verificato come <code>{who}</code>" if who else "NON verificato"
+    else:
+        try:
+            m = await bot.get_chat_member(gid, msg.from_user.id) if gid else None
+            tu = f"stato membro: {m.status}" if m else "gruppo non impostato"
+        except Exception as e:
+            tu = f"errore lettura membri: {type(e).__name__}"
+    return (f"Gruppo configurato: <code>{gid}</code>\n"
+            f"Filtro gruppo: {'ON' if gonly else 'OFF (tutti passano)'}\n"
+            f"Bot: {'attivo' if en else 'spento'}\nTu: {tu}")
+
+
 # ==================== VERIFICA ANONIMI ====================
 async def _ask_verify(msg, bot):
     me = await bot.me()
@@ -120,12 +138,13 @@ async def _ask_verify(msg, bot):
     ])
     await msg.answer("Stai scrivendo in <b>anonimo</b>, quindi non so chi sei.\n\n"
                      "Premi «Verifica ora»: si apre la chat privata, premi START e la verifica "
-                     "si completa da sola. Il link scade tra 10 minuti.", reply_markup=kbd)
+                     "si completa da sola. Vale in modo permanente finché resti admin.",
+                     reply_markup=kbd)
 
 
 @anon_router.callback_query(F.data == "v:check")
 async def cb_check(cb: CallbackQuery):
-    if kb.anon_chat_ok(cb.message.chat.id):
+    if await kb.anon_is_admin(cb.message.chat.id):
         await cb.answer("Verificato. Ripeti il comando.", show_alert=True)
     else:
         await cb.answer("Non ancora verificato. Premi «Verifica ora».", show_alert=True)
@@ -167,21 +186,19 @@ async def start_verify(msg: Message, command: CommandObject, bot: Bot):
     if not await db.is_admin(msg.from_user.id):
         return await msg.answer("Sei un utente Telegram valido, ma non risulti tra gli "
                                 "amministratori del bot.")
-    ttl = await db.get_int("anon_ttl_min")
-    await kb.mark_anon_ok(chat_id, ttl)
+    await db.set_anon_verified(chat_id, msg.from_user.id)
     if await db.get_group_id() == 0:
         await db.set_setting("group_id", str(chat_id))
     nome = msg.from_user.first_name or "un admin"
     try:
         await bot.send_message(chat_id,
                                f"✅ <a href=\"tg://user?id={msg.from_user.id}\">{nome}</a> "
-                               f"è verificato come amministratore per {ttl} minuti.\n"
-                               f"Puoi ripetere il comando.")
+                               f"è verificato come amministratore.\n"
+                               f"Puoi ripetere il comando. Resta valido finché sei admin.")
     except Exception:
         pass
     await db.log(msg.from_user.id, "anon_verify", str(chat_id))
-    await msg.answer(f"Verifica completata, vale {ttl} minuti.\n"
-                     f"Torna nel gruppo e ripeti il comando.")
+    await msg.answer("Verifica completata e permanente.\nTorna nel gruppo e ripeti il comando.")
 
 
 @user_router.message(Command("start"))
@@ -296,12 +313,25 @@ async def panel(msg: Message, state: FSMContext):
                      reply_markup=kb.admin_menu())
 
 
+@admin_router.message(Command("stato"))
+async def stato_cmd(msg: Message, bot: Bot, state: FSMContext):
+    await state.clear()
+    await msg.answer(await _stato_text(msg, bot), reply_markup=kb.back())
+
+
+@admin_router.callback_query(F.data == "a:stato")
+async def cb_stato(cb: CallbackQuery, bot: Bot):
+    await cb.message.answer(await _stato_text(cb.message, bot), reply_markup=kb.back())
+    await cb.answer()
+
+
 @admin_router.message(Command("comandi"))
 async def comandi_cmd(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer(
         "<b>Comandi</b>\n\n"
         "/admin - pannello\n"
+        "/stato - diagnostica\n"
         "/aggiungi - inserisci una lista\n"
         "/liberi - liste non assegnate\n"
         "/assegnazioni - storico consegne\n"
@@ -316,17 +346,23 @@ async def comandi_cmd(msg: Message, state: FSMContext):
         "/setgroup - gruppo autorizzato\n"
         "/setlink - link d'invito\n"
         "/verifica - riverifica admin anonimo\n"
+        "/deverifica - revoca la verifica\n"
         "/toggle - accendi o spegni\n"
         "/esporta - esporta le liste libere\n"
         "/annulla - interrompi\n\n"
-        "Tutti accettano ID, @username o inoltro. Se lanci un comando da solo, "
-        "il bot chiede cosa gli serve.",
+        "Tutti accettano ID, @username o inoltro.",
         reply_markup=kb.back())
 
 
 @admin_router.message(Command("verifica"))
 async def verifica_cmd(msg: Message, bot: Bot):
     await _ask_verify(msg, bot)
+
+
+@admin_router.message(Command("deverifica"))
+async def deverifica_cmd(msg: Message):
+    await db.clear_anon_verified(msg.chat.id)
+    await msg.answer("Verifica revocata per questa chat.", reply_markup=kb.back())
 
 
 @admin_router.callback_query(F.data == "a:verify")
@@ -688,6 +724,7 @@ async def admin_del(msg: Message, state: FSMContext):
         if not uid:
             return await _need_target(msg)
         await db.del_admin(uid)
+        await db.clear_anon_by_user(uid)
         await db.log(msg.from_user.id, "admin_del", str(uid))
         return await msg.answer(f"{uid} non è più amministratore.", reply_markup=kb.back())
     await state.set_state(Ask.wait)
@@ -943,6 +980,7 @@ async def ask_input(msg: Message, state: FSMContext):
         testo = f"{uid} ora è amministratore."
     elif action == "admin_del":
         await db.del_admin(uid)
+        await db.clear_anon_by_user(uid)
         await db.log(msg.from_user.id, "admin_del", str(uid))
         testo = f"{uid} non è più amministratore."
     elif action == "ban":
