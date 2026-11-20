@@ -202,3 +202,42 @@ async def test_list(kind, payload):
             return await _test_m3u(s, payload)
     except Exception as e:
         return Result(False, f"errore: {type(e).__name__}")
+
+GETPHP = re.compile(r"https?://[^\s<>\"']*?/get\.php\?[^\s<>\"']*?username=([^&\s]+)"
+                    r"[^\s<>\"']*?password=([^&\s]+)", re.I)
+
+
+def detect_many(text):
+    if not text:
+        return []
+    items, seen = [], set()
+
+    def add(it):
+        p = it["payload"]
+        key = it["kind"] + "|" + "|".join(str(p.get(k, "")) for k in ("server", "url", "portal", "username", "password"))
+        if key in seen:
+            return
+        seen.add(key)
+        items.append(it)
+
+    for m in GETPHP.finditer(text):
+        server = _base(m.group(0))
+        add({"kind": "xtream", "label": f"{server} · {m.group(1)}",
+             "payload": {"server": server, "username": m.group(1), "password": m.group(2)}})
+
+    for m in URL.finditer(text):
+        u = m.group(0).rstrip(".,;)")
+        low = u.lower()
+        if "get.php" in low:
+            continue
+        if low.endswith((".m3u", ".m3u8")):
+            add({"kind": "m3u", "label": _base(u), "payload": {"url": u}})
+        elif "/c/" in low or "portal.php" in low:
+            add({"kind": "stalker", "label": _base(u), "payload": {"portal": _base(u), "mac": ""}})
+
+    macs = [m.group(0).upper() for m in MAC.finditer(text)]
+    for it in items:
+        if it["kind"] == "stalker" and not it["payload"]["mac"] and macs:
+            it["payload"]["mac"] = macs.pop(0)
+
+    return [i for i in items if i["kind"] != "stalker" or i["payload"]["mac"]]
