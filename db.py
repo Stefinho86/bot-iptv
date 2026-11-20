@@ -339,9 +339,9 @@ async def free_lists_kind(kind, offset, limit):
         if kind:
             return await c.fetch(
                 "SELECT * FROM lists WHERE status='free' AND kind=$1 "
-                "ORDER BY id DESC OFFSET $2 LIMIT $3", kind, offset, limit)
+                "ORDER BY id ASC OFFSET $2 LIMIT $3", kind, offset, limit)
         return await c.fetch(
-            "SELECT * FROM lists WHERE status='free' ORDER BY id DESC OFFSET $1 LIMIT $2",
+            "SELECT * FROM lists WHERE status='free' ORDER BY id ASC OFFSET $1 LIMIT $2",
             offset, limit)
 
 
