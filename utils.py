@@ -84,9 +84,11 @@ NEG_TTL = 60
 
 
 async def member_ok(bot, uid):
-    gid = await db.get_group_id()
-    if gid == 0 or await db.get_int("group_only") == 0:
+    if await db.get_int("group_only") == 0:
         return True
+    gid = await db.get_group_id()
+    if gid == 0:
+        return False
     now = time.time()
     hit = _MEMBER_CACHE.get(uid)
     if hit and now - hit[0] < hit[1]:
