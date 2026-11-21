@@ -46,6 +46,8 @@ HINT = "\n\nScrivi /annulla per interrompere."
 MAX_ANTEPRIMA = 15
 PER_PAGE = 10
 
+NONMOD = object()
+
 
 class Add(StatesGroup):
     m3u = State()
@@ -183,14 +185,14 @@ async def _mostra(cb, testo, kbd=None):
 
 
 async def _invia_o_modifica(msg, testo, kbd, edit=True):
-    """None se la pagina è stata mostrata, altrimenti l'eccezione."""
+    """None se mostrata, NONMOD se identica, altrimenti l'eccezione."""
     if edit:
         try:
             await msg.edit_text(testo, reply_markup=kbd)
             return None
         except Exception as e:
             if "not modified" in str(e).lower():
-                return None
+                return NONMOD
     try:
         await msg.answer(testo, reply_markup=kbd)
         return None
@@ -198,11 +200,15 @@ async def _invia_o_modifica(msg, testo, kbd, edit=True):
         return e
 
 
-async def _esito(cb, errore):
-    if errore is None or cb is None:
+async def _esito(cb, errore, nota=""):
+    if cb is None:
         return
     try:
-        await cb.answer(f"Invio fallito: {type(errore).__name__}: {errore}"[:195], show_alert=True)
+        if errore is NONMOD:
+            await cb.answer(nota or "Nessuna modifica", show_alert=True)
+        elif errore is not None:
+            await cb.answer(f"Invio fallito: {type(errore).__name__}: {errore}"[:195],
+                            show_alert=True)
     except Exception:
         pass
 
@@ -377,14 +383,42 @@ async def _rispondi(cb):
         print(f"answer: {type(e).__name__}: {e}")
 
 
+def _pagina_da(data):
+    """Legge lu:p:<bersaglio>:<corrente>:<pagine> oppure lu:<bersaglio>."""
+    pezzi = (data or "").split(":")
+    if len(pezzi) >= 5 and pezzi[1] == "p":
+        try:
+            return int(pezzi[2]), int(pezzi[3]), int(pezzi[4])
+        except ValueError:
+            pass
+    if len(pezzi) >= 2:
+        try:
+            return int(pezzi[1]), None, None
+        except ValueError:
+            pass
+    return 0, None, None
+
+
 def _nav_pagine(prefisso, page, pagine):
+    """Ogni pulsante porta un bersaglio esplicito: mai lo stesso valore
+    della pagina corrente, così la pressione produce sempre un cambiamento."""
     return [
-        InlineKeyboardButton(text="◀️" if page > 0 else "·",
-                             callback_data=f"{prefisso}:{max(0, page - 1)}"),
-        InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"),
-        InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
-                             callback_data=f"{prefisso}:{min(pagine - 1, page + 1)}"),
+        InlineKeyboardButton(text="◀️",
+                             callback_data=f"{prefisso}:p:{max(0, page - 1)}:{page}:{pagine}"),
+        InlineKeyboardButton(text=f"pag. {page + 1}/{pagine}",
+                             callback_data=f"{prefisso}:p:{page}:{page}:{pagine}"),
+        InlineKeyboardButton(text="▶️",
+                             callback_data=f"{prefisso}:p:{min(pagine - 1, page + 1)}:{page}:{pagine}"),
     ]
+
+
+def _numeri_pagina(prefisso, page, pagine):
+    """Riga di numeri cliccabili: funziona anche se le frecce dessero noia."""
+    if pagine < 2 or pagine > 6:
+        return None
+    return [InlineKeyboardButton(text=("•" if n == page else str(n + 1)),
+                                 callback_data=f"{prefisso}:p:{n}:{page}:{pagine}")
+            for n in range(pagine)]
 
 
 def _coda_pagina():
@@ -394,7 +428,7 @@ def _coda_pagina():
     ]
 
 
-async def _mostra_utenti(msg, page, edit=True, cb=None):
+async def _mostra_utenti(msg, page, edit=True, cb=None, nota=""):
     try:
         if msg is None:
             return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
@@ -402,7 +436,7 @@ async def _mostra_utenti(msg, page, edit=True, cb=None):
         if not tot:
             errore = await _invia_o_modifica(msg, "Nessun utente normale registrato.",
                                              kb.nav("a:menu"), edit)
-            return await _esito(cb, errore)
+            return await _esito(cb, errore, nota)
         pagine = max(1, (tot - 1) // PER_PAGE + 1)
         page = max(0, min(int(page), pagine - 1))
         righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
@@ -416,18 +450,21 @@ async def _mostra_utenti(msg, page, edit=True, cb=None):
                                      callback_data=f"lb:{'unban' if bannato else 'ban'}:"
                                                    f"{r['user_id']}:{page}"),
             ])
+        numeri = _numeri_pagina("lu", page, pagine)
+        if numeri:
+            tastiera.append(numeri)
         tastiera.append(_nav_pagine("lu", page, pagine))
         tastiera += _coda_pagina()
-        testo = (f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
+        testo = (f"👤 Utenti normali: {tot} — pagina {page + 1} di {pagine}\n"
                  f"Tocca il nome per aprire la chat.")
         errore = await _invia_o_modifica(msg, testo,
                                          InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
-        await _esito(cb, errore)
+        await _esito(cb, errore, nota or f"Sei già a pagina {page + 1} di {pagine}")
     except Exception as e:
         await _avvisa(cb, e)
 
 
-async def _mostra_bannati(msg, page, edit=True, cb=None):
+async def _mostra_bannati(msg, page, edit=True, cb=None, nota=""):
     try:
         if msg is None:
             return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
@@ -435,7 +472,7 @@ async def _mostra_bannati(msg, page, edit=True, cb=None):
         if not tot:
             errore = await _invia_o_modifica(msg, "Nessun utente bannato.",
                                              kb.nav("a:menu"), edit)
-            return await _esito(cb, errore)
+            return await _esito(cb, errore, nota)
         pagine = max(1, (tot - 1) // PER_PAGE + 1)
         page = max(0, min(int(page), pagine - 1))
         righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
@@ -448,14 +485,33 @@ async def _mostra_bannati(msg, page, edit=True, cb=None):
                                      callback_data=f"lb:unban:{r['user_id']}:{page}"),
             ])
             tastiera.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
+        numeri = _numeri_pagina("lp", page, pagine)
+        if numeri:
+            tastiera.append(numeri)
         tastiera.append(_nav_pagine("lp", page, pagine))
         tastiera += _coda_pagina()
         errore = await _invia_o_modifica(
-            msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
+            msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1} di {pagine}",
             InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
-        await _esito(cb, errore)
+        await _esito(cb, errore, nota or f"Sei già a pagina {page + 1} di {pagine}")
     except Exception as e:
         await _avvisa(cb, e)
+
+
+async def _apri_utenti(cb, page, corrente=None):
+    await _rispondi(cb)
+    if not await _sono_admin(cb):
+        return
+    nota = f"Sei già a pagina {page + 1}" if corrente is not None and page == corrente else ""
+    await _mostra_utenti(cb.message, page, edit=True, cb=cb, nota=nota)
+
+
+async def _apri_bannati(cb, page, corrente=None):
+    await _rispondi(cb)
+    if not await _sono_admin(cb):
+        return
+    nota = f"Sei già a pagina {page + 1}" if corrente is not None and page == corrente else ""
+    await _mostra_bannati(cb.message, page, edit=True, cb=cb, nota=nota)
 
 
 @page_router.callback_query(F.data == "a:noop")
@@ -463,36 +519,26 @@ async def cb_noop(cb: CallbackQuery):
     await _rispondi(cb)
 
 
-@page_router.callback_query(F.data.in_({"a:allusers", "lu:0"}))
-async def cb_utenti_apri(cb: CallbackQuery):
-    await _rispondi(cb)
-    if not await _sono_admin(cb):
-        return
-    await _mostra_utenti(cb.message, 0, edit=True, cb=cb)
+@page_router.callback_query(F.data == "a:allusers")
+async def cb_allusers(cb: CallbackQuery):
+    await _apri_utenti(cb, 0)
 
 
-@page_router.callback_query(F.data.in_({"a:banned", "lp:0"}))
-async def cb_bannati_apri(cb: CallbackQuery):
-    await _rispondi(cb)
-    if not await _sono_admin(cb):
-        return
-    await _mostra_bannati(cb.message, 0, edit=True, cb=cb)
-
-
-@page_router.callback_query(F.data.startswith("lu:"))
+@page_router.callback_query(F.data.startswith("lu"))
 async def cb_utenti_pagina(cb: CallbackQuery):
-    await _rispondi(cb)
-    if not await _sono_admin(cb):
-        return
-    await _mostra_utenti(cb.message, _num(cb.data, 1), edit=True, cb=cb)
+    bersaglio, corrente, _ = _pagina_da(cb.data)
+    await _apri_utenti(cb, bersaglio, corrente)
 
 
-@page_router.callback_query(F.data.startswith("lp:"))
+@page_router.callback_query(F.data == "a:banned")
+async def cb_banned(cb: CallbackQuery):
+    await _apri_bannati(cb, 0)
+
+
+@page_router.callback_query(F.data.startswith("lp"))
 async def cb_bannati_pagina(cb: CallbackQuery):
-    await _rispondi(cb)
-    if not await _sono_admin(cb):
-        return
-    await _mostra_bannati(cb.message, _num(cb.data, 1), edit=True, cb=cb)
+    bersaglio, corrente, _ = _pagina_da(cb.data)
+    await _apri_bannati(cb, bersaglio, corrente)
 
 
 @page_router.callback_query(F.data.startswith("lb:"))
