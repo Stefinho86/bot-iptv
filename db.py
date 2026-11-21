@@ -4,6 +4,7 @@ import json
 import asyncpg
 
 import config
+from services import chiavi_lista
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS admins(
@@ -253,6 +254,19 @@ async def add_list(kind, payload, label, by):
         return await c.fetchval(
             "INSERT INTO lists(kind,payload,label,added_by,added_at) VALUES($1,$2,$3,$4,$5) RETURNING id",
             kind, json.dumps(payload, ensure_ascii=False), label, by, now())
+
+
+async def lista_simile(kind, payload):
+    chiavi = chiavi_lista(kind, payload)
+    if not chiavi:
+        return None
+    async with _pool.acquire() as c:
+        righe = await c.fetch(
+            "SELECT id, kind, payload, status, label FROM lists WHERE kind=$1 ORDER BY id", kind)
+    for r in righe:
+        if chiavi & chiavi_lista(kind, json.loads(r["payload"])):
+            return r
+    return None
 
 
 async def set_test(lid, ok, note):
