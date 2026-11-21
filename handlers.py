@@ -396,13 +396,21 @@ def _taglio(righe, page):
 
 
 def _coppia(data):
-    """Legge a:u:<pagina>:<corrente> (o a:n:...) oppure lu:<pagina>."""
+    """Legge a:u:<pagina>:<corrente> (o a:n:...) oppure lu:p:<pagina>:<corrente>:... oppure lu:<pagina>."""
     pezzi = (data or "").split(":")
+    # Nuovo formato: a:u:pagina:corrente
     if len(pezzi) >= 4 and pezzi[1] in ("u", "n"):
         try:
             return int(pezzi[2]), int(pezzi[3])
         except ValueError:
             pass
+    # Vecchio formato: lu:p:pagina:corrente:pagine o lp:p:...
+    if len(pezzi) >= 5 and pezzi[1] == "p":
+        try:
+            return int(pezzi[2]), int(pezzi[3])
+        except ValueError:
+            pass
+    # Formato semplice: lu:pagina o lp:pagina
     if len(pezzi) >= 2:
         try:
             return int(pezzi[1]), None
@@ -442,13 +450,14 @@ async def _mostra_utenti(msg, page, edit=True, cb=None, nota=""):
     try:
         if msg is None:
             return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
-        tutti = list(await db.all_users_list(config.SUPER_ADMINS))
-        tot = len(tutti)
+        tot = await db.count_users(config.SUPER_ADMINS)
         if not tot:
             errore = await _invia_o_modifica(msg, "Nessun utente normale registrato.",
                                              kb.nav("a:menu"), edit)
             return await _esito(cb, errore, nota)
-        page, pagine, righe = _taglio(tutti, page)
+        pagine = _pagine(tot)
+        page = max(0, min(int(page), pagine - 1))
+        righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
         tastiera = []
         for r in righe:
             bannato = bool(r["banned"])
@@ -478,13 +487,14 @@ async def _mostra_bannati(msg, page, edit=True, cb=None, nota=""):
     try:
         if msg is None:
             return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
-        tutti = list(await db.banned_users_list())
-        tot = len(tutti)
+        tot = await db.count_banned()
         if not tot:
             errore = await _invia_o_modifica(msg, "Nessun utente bannato.",
                                              kb.nav("a:menu"), edit)
             return await _esito(cb, errore, nota)
-        page, pagine, righe = _taglio(tutti, page)
+        pagine = _pagine(tot)
+        page = max(0, min(int(page), pagine - 1))
+        righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
         tastiera = []
         for r in righe:
             motivo = (r["ban_reason"] or "senza motivo")[:20]
