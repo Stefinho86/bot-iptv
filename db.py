@@ -338,14 +338,20 @@ async def revoke(aid):
 
 async def stats():
     async with _pool.acquire() as c:
+        su = list(config.SUPER_ADMINS)
         out = {}
-        for label, sql in (
-            ("free", "SELECT COUNT(*) FROM lists WHERE status='free'"),
-            ("assigned", "SELECT COUNT(*) FROM lists WHERE status='assigned'"),
-            ("users", "SELECT COUNT(*) FROM users"),
-            ("banned", "SELECT COUNT(*) FROM users WHERE banned=TRUE"),
-        ):
-            out[label] = await c.fetchval(sql)
+        out["free"] = await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free'")
+        out["assigned"] = await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='assigned'")
+        out["banned"] = await c.fetchval("SELECT COUNT(*) FROM users WHERE banned=TRUE")
+        out["super"] = len(su)
+        out["admins"] = (await c.fetchval(
+            "SELECT COUNT(*) FROM admins WHERE user_id <> ALL($1::bigint[])", su)
+            + await c.fetchval("SELECT COUNT(*) FROM admin_names"))
+        out["users"] = await c.fetchval(
+            "SELECT COUNT(*) FROM users WHERE user_id <> ALL($1::bigint[]) "
+            "AND user_id NOT IN (SELECT user_id FROM admins) "
+            "AND (username IS NULL OR lower(username) NOT IN "
+            "     (SELECT lower(username) FROM admin_names))", su)
         return out
 
 
