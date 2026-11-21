@@ -217,6 +217,18 @@ def _parse_stalker(testo):
     return out
 
 
+def _pulisci(uid):
+    for cid, d in list(MULTI.items()):
+        if d.get("uid") == uid:
+            MULTI.pop(cid, None)
+    for cid, it in list(TMP.items()):
+        if it.get("uid") == uid:
+            TMP.pop(cid, None)
+    for cid, d in list(BULK.items()):
+        if d.get("uid") == uid:
+            BULK.pop(cid, None)
+
+
 # ==================== VERIFICA ANONIMI ====================
 async def _ask_verify(target, bot, edit=False):
     me = await bot.me()
@@ -621,11 +633,25 @@ PROMPT = {
 }
 
 
+@admin_router.callback_query(F.data == "a:cancel")
+async def add_cancel(cb: CallbackQuery, state: FSMContext):
+    await cb.answer("Annullato")
+    _pulisci(cb.from_user.id)
+    await state.clear()
+    try:
+        await cb.message.edit_text("Annullato, niente salvato.\n\nPer ricominciare: /aggiungi.",
+                                   reply_markup=kb.back())
+    except Exception:
+        await cb.message.answer("Annullato, niente salvato.\n\nPer ricominciare: /aggiungi.",
+                                reply_markup=kb.back())
+
+
 @admin_router.callback_query(F.data.startswith("a:k:"))
 async def cb_kind(cb: CallbackQuery, state: FSMContext):
     kind = cb.data.split(":")[2]
-    await state.update_data(kind=kind)
     if kind == "bulk":
+        await state.clear()
+        await state.update_data(kind="bulk")
         await state.set_state(Add.bulk)
         await cb.message.edit_text(
             "Mandami il <b>file .txt</b>, uno <b>screenshot</b> con le liste nella didascalia, "
@@ -633,6 +659,11 @@ async def cb_kind(cb: CallbackQuery, state: FSMContext):
             "Riconosco Xtream, M3U e Stalker, scarto le copie e ti mostro cosa ho trovato "
             "prima di salvare." + HINT, reply_markup=kb.back())
         return await cb.answer()
+    if kind not in PROMPT:
+        await cb.message.edit_text("Che tipo di lista vuoi inserire?", reply_markup=kb.kinds())
+        return await cb.answer("Scegli un tipo")
+    await state.clear()
+    await state.update_data(kind=kind)
     passo, testo = PROMPT[kind]
     await state.set_state(passo)
     await cb.message.edit_text(testo + HINT, reply_markup=kb.back())
@@ -641,7 +672,9 @@ async def cb_kind(cb: CallbackQuery, state: FSMContext):
 
 async def _ask_confirm(target, state: FSMContext, item):
     cid = uuid.uuid4().hex[:10]
+    item["uid"] = target.from_user.id
     TMP[cid] = item
+    await state.update_data(kind=item["kind"])
     await state.set_state(Add.confirm)
     dup = await db.lista_simile(item["kind"], item["payload"])
     if dup:
@@ -665,7 +698,8 @@ async def _ask_confirm(target, state: FSMContext, item):
 
 async def _mostra_multiplo(target, state: FSMContext, kind, items):
     cid = uuid.uuid4().hex[:10]
-    MULTI[cid] = {"items": items, "kind": kind}
+    MULTI[cid] = {"items": items, "kind": kind, "uid": target.from_user.id}
+    await state.update_data(kind=kind)
     await state.set_state(Add.confirm)
     righe = "\n\n".join(_bulk_line(n, it) for n, it in enumerate(items, 1))
     testo = (f"Ho riconosciuto <b>{len(items)}</b> liste separate:\n\n{righe}\n\n"
@@ -756,11 +790,30 @@ async def add_s_mac(msg: Message, state: FSMContext):
 
 
 @admin_router.message(StateFilter(Add.m3u, Add.x_server, Add.x_user, Add.x_pass,
-                                  Add.s_portal, Add.s_mac), F.photo)
+                                  Add.s_portal, Add.s_mac, Add.confirm), F.photo)
 async def add_foto_reject(msg: Message):
     await msg.answer("Qui accetto solo testo o copia-incolla.\n"
                      "Per una foto o un file usa /aggiungi e scegli «Aggiungi foto/txt».",
                      reply_markup=kb.back())
+
+
+@admin_router.message(Add.confirm, F.text)
+async def confirm_text(msg: Message, state: FSMContext):
+    kind = (await state.get_data()).get("kind")
+    testo = msg.text or ""
+    if kind == "xtream":
+        fatte = _parse_xtream(testo)
+    elif kind == "stalker":
+        fatte = _parse_stalker(testo)
+    elif kind == "m3u":
+        fatte = _parse_m3u(testo)
+    else:
+        fatte = _parse_m3u(testo) + _parse_xtream(testo) + _parse_stalker(testo)
+    if not fatte:
+        return await msg.answer("Non ho riconosciuto liste. Rimandamele oppure /annulla.")
+    if len(fatte) == 1:
+        return await _ask_confirm(msg, state, fatte[0])
+    await _mostra_multiplo(msg, state, kind or fatte[0]["kind"], fatte)
 
 
 @admin_router.callback_query(F.data.startswith("a:mok:"))
@@ -787,7 +840,13 @@ async def multi_redo(cb: CallbackQuery, state: FSMContext):
     d = MULTI.pop(cid, None)
     if not d:
         return await cb.answer("Elenco scaduto", show_alert=True)
-    passo, testo = PROMPT[d["kind"]]
+    kind = d["kind"]
+    if kind not in PROMPT:
+        await state.clear()
+        await cb.message.edit_text("Che tipo di lista vuoi inserire?", reply_markup=kb.kinds())
+        return await cb.answer("Scegli un tipo")
+    passo, testo = PROMPT[kind]
+    await state.update_data(kind=kind)
     await state.set_state(passo)
     await cb.message.edit_text(testo + HINT, reply_markup=kb.back())
     await cb.answer("Rimanda le liste")
@@ -954,7 +1013,7 @@ async def bulk_input(msg: Message, state: FSMContext):
 
     cid = uuid.uuid4().hex[:10]
     BULK[cid] = {"items": items, "sel": set(range(len(items))) - gia,
-                 "dup": dup, "dub": gia}
+                 "dup": dup, "dub": gia, "uid": msg.from_user.id}
     await state.set_state(Add.confirm)
     testo_rip, kbd = _bulk_summary(cid)
     await msg.answer(testo_rip, reply_markup=kbd)
@@ -1052,15 +1111,9 @@ async def bulk_confirm(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@admin_router.callback_query(F.data == "a:cancel")
-async def add_cancel(cb: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await cb.message.edit_text("Annullato.", reply_markup=kb.back())
-    await cb.answer()
-
-
 @admin_router.message(Command("annulla"))
 async def cancel_cmd(msg: Message, state: FSMContext):
+    _pulisci(msg.from_user.id)
     await state.clear()
     await msg.answer("Operazione annullata.")
 
