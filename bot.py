@@ -3,7 +3,6 @@ import logging
 import os
 import socket
 import ssl
-import time
 import traceback
 
 import aiohttp
@@ -43,6 +42,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="deverifica", description="Revoca verifica"),
     BotCommand(command="toggle", description="Accendi o spegni"),
     BotCommand(command="esporta", description="Esporta liste libere"),
+    BotCommand(command="log", description="File di log"),
     BotCommand(command="comandi", description="Elenco comandi"),
 ]
 
@@ -145,8 +145,8 @@ async def _attendi_rete(bot) -> bool:
             await asyncio.sleep(5)
     return False
 
+
 async def _registra_comandi(bot):
-    await asyncio.sleep(8)
     for tentativo in range(1, 3):
         try:
             await bot.set_my_commands(USER_CMDS, scope=BotCommandScopeDefault())
@@ -160,6 +160,35 @@ async def _registra_comandi(bot):
         except Exception as e:
             print(f"Comandi non registrati ({type(e).__name__})")
             await asyncio.sleep(15)
+
+
+async def _avvisa_admin(bot):
+    testo = ("♻️ <b>Nuova versione attiva</b>\n\n"
+             "Il bot è stato aggiornato. Riapri il pannello con /admin: "
+             "i pulsanti vecchi possono essere diversi.")
+    destinatari = set(config.SUPER_ADMINS)
+    for r in await db.all_admins():
+        destinatari.add(r["user_id"])
+    for uid in destinatari:
+        try:
+            await bot.send_message(uid, testo)
+        except Exception:
+            pass
+
+
+async def avvisa_admin(bot, solo=None):
+    testo = ("♻️ <b>Bot ricaricato</b>\n\n"
+             "Comandi e pannello sono stati riallineati. Riapri con /admin.")
+    destinatari = {solo} if solo else set(config.SUPER_ADMINS)
+    if not solo:
+        for r in await db.all_admins():
+            destinatari.add(r["user_id"])
+    for uid in destinatari:
+        try:
+            await bot.send_message(uid, testo)
+        except Exception:
+            pass
+
 
 async def run_once():
     await db.init()
@@ -223,7 +252,8 @@ async def run_once():
     except Exception as e:
         print(f"delete_webhook saltato: {type(e).__name__}")
 
-    asyncio.create_task(_registra_comandi(bot))
+    await _registra_comandi(bot)
+    asyncio.create_task(_avvisa_admin(bot))
     print("POLLING ATTIVO")
 
     try:
