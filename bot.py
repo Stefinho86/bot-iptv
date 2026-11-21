@@ -15,7 +15,7 @@ from aiohttp import web
 
 import config
 import db
-from handlers import admin_router, anon_router, user_router
+from handlers import admin_router, anon_router, page_router, user_router
 
 USER_CMDS = [
     BotCommand(command="lista", description="Ricevi una lista IPTV"),
@@ -30,6 +30,8 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="assegnazioni", description="Storico assegnazioni"),
     BotCommand(command="revoca", description="Revoca un'assegnazione"),
     BotCommand(command="utenti", description="Cerca utente"),
+    BotCommand(command="elenco", description="Elenco utenti"),
+    BotCommand(command="bannati", description="Utenti bannati"),
     BotCommand(command="ban", description="Banna utente"),
     BotCommand(command="unban", description="Sblocca utente"),
     BotCommand(command="reset", description="Azzera cooldown"),
@@ -106,13 +108,33 @@ async def start_health_once():
     print(f"Health server su :{port}")
 
 
+async def _errori(update, exception):
+    """Qualunque eccezione non gestita viene mostrata, non ingoiata."""
+    print(f"ERRORE HANDLER: {type(exception).__name__}: {exception}")
+    traceback.print_exception(type(exception), exception, exception.__traceback__)
+    testo = f"{type(exception).__name__}: {exception}"[:190]
+    try:
+        cb = getattr(update, "callback_query", None)
+        if cb:
+            await cb.answer(f"ERRORE {testo}", show_alert=True)
+            return True
+        msg = getattr(update, "message", None)
+        if msg:
+            await msg.answer(f"<b>ERRORE</b>\n<code>{testo}</code>")
+    except Exception:
+        pass
+    return True
+
+
 def build_dispatcher() -> Dispatcher:
-    for r in (admin_router, anon_router, user_router):
+    for r in (page_router, admin_router, anon_router, user_router):
         r._parent_router = None
     dp = Dispatcher()
+    dp.include_router(page_router)
     dp.include_router(admin_router)
     dp.include_router(anon_router)
     dp.include_router(user_router)
+    dp.errors.register(_errori)
     return dp
 
 
