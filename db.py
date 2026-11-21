@@ -361,6 +361,25 @@ async def all_free_payloads():
         return [{**dict(r), "added_at": r["added_at"].isoformat()} for r in rows]
 
 
+# ---- elenchi utenti: righe vere, il taglio avviene in Python ----
+async def all_users_list(escludi):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT user_id, username, full_name, banned FROM users "
+            "WHERE user_id <> ALL($1::bigint[]) "
+            "AND user_id NOT IN (SELECT user_id FROM admins) "
+            "AND (username IS NULL OR lower(username) NOT IN "
+            "     (SELECT lower(username) FROM admin_names)) "
+            "ORDER BY first_seen DESC", list(escludi))
+
+
+async def banned_users_list():
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT user_id, username, full_name, ban_reason FROM users "
+            "WHERE banned = TRUE ORDER BY first_seen DESC")
+
+
 async def all_users(offset, limit, escludi):
     async with _pool.acquire() as c:
         return await c.fetch(
