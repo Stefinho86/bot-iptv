@@ -147,14 +147,20 @@ async def _edit(target, testo, kbd=None):
 
 async def _mostra(cb, testo, kbd=None):
     try:
-        await cb.message.delete()
-    except Exception:
-        pass
-    try:
-        await cb.message.answer(testo, reply_markup=kbd)
+        await cb.message.edit_text(testo, reply_markup=kbd)
         return True
-    except Exception:
-        return await _edit(cb.message, testo, kbd)
+    except Exception as e:
+        if "not modified" in str(e).lower():
+            return True
+        try:
+            await cb.message.answer(testo, reply_markup=kbd)
+            return True
+        except Exception as e2:
+            try:
+                await cb.answer(f"ERRORE {type(e2).__name__}: {e2}"[:195], show_alert=True)
+            except Exception:
+                pass
+            return False
 
 
 def _forwarded_uid(msg):
@@ -622,7 +628,7 @@ async def cb_toggle(cb: CallbackQuery):
 
 
 # ==================== PAGINE ====================
-PER_PAGE = 8
+PER_PAGE = 10
 
 
 @admin_router.callback_query(F.data == "a:noop")
@@ -633,33 +639,25 @@ async def cb_noop(cb: CallbackQuery):
 @admin_router.callback_query(F.data.startswith("pu:"))
 async def pg_users(cb: CallbackQuery):
     page = _num(cb.data, 1)
-    try:
-        await cb.answer(f"Pagina {page + 1}")
-    except Exception:
-        pass
-    try:
-        await _show_users_page(cb, page)
-    except Exception as e:
-        try:
-            await cb.message.answer(f"Errore pagina utenti: {type(e).__name__}: {e}")
-        except Exception:
-            pass
+    await cb.answer(f"Pagina {page + 1}")
+    await _show_users_page(cb, page)
 
 
 @admin_router.callback_query(F.data.startswith("pb:"))
 async def pg_banned(cb: CallbackQuery):
     page = _num(cb.data, 1)
-    try:
-        await cb.answer(f"Pagina {page + 1}")
-    except Exception:
-        pass
-    try:
-        await _show_banned_page(cb, page)
-    except Exception as e:
-        try:
-            await cb.message.answer(f"Errore pagina bannati: {type(e).__name__}: {e}")
-        except Exception:
-            pass
+    await cb.answer(f"Pagina {page + 1}")
+    await _show_banned_page(cb, page)
+
+
+def _nav_pagine(cb_prefisso, page, pagine):
+    return [
+        InlineKeyboardButton(text="◀️" if page > 0 else "·",
+                             callback_data=f"{cb_prefisso}:{max(0, page - 1)}"),
+        InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"),
+        InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
+                             callback_data=f"{cb_prefisso}:{min(pagine - 1, page + 1)}"),
+    ]
 
 
 async def _show_users_page(cb, page):
@@ -678,14 +676,7 @@ async def _show_users_page(cb, page):
                 text=("Sblocca" if r["banned"] else "Banna"),
                 callback_data=f"lb:{'unban' if r['banned'] else 'ban'}:{r['user_id']}:{page}"),
         ])
-    nav = []
-    nav.append(InlineKeyboardButton(
-        text="◀️" if page > 0 else "·", callback_data=f"pu:{max(0, page - 1)}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"))
-    nav.append(InlineKeyboardButton(
-        text="▶️" if (page + 1) * PER_PAGE < tot else "·",
-        callback_data=f"pu:{min(pagine - 1, page + 1)}"))
-    tastiera.append(nav)
+    tastiera.append(_nav_pagine("pu", page, pagine))
     tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
     tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     await _mostra(cb,
@@ -697,13 +688,7 @@ async def _show_users_page(cb, page):
 @admin_router.callback_query(F.data.startswith("a:allusers"))
 async def cb_allusers(cb: CallbackQuery):
     await cb.answer()
-    try:
-        await _show_users_page(cb, _num(cb.data, 2))
-    except Exception as e:
-        try:
-            await cb.message.answer(f"Errore elenco utenti: {type(e).__name__}: {e}")
-        except Exception:
-            pass
+    await _show_users_page(cb, _num(cb.data, 2))
 
 
 async def _show_banned_page(cb, page):
@@ -721,14 +706,7 @@ async def _show_banned_page(cb, page):
             InlineKeyboardButton(text="Sblocca",
                                  callback_data=f"lb:unban:{r['user_id']}:{page}"),
         ])
-    nav = []
-    nav.append(InlineKeyboardButton(
-        text="◀️" if page > 0 else "·", callback_data=f"pb:{max(0, page - 1)}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"))
-    nav.append(InlineKeyboardButton(
-        text="▶️" if (page + 1) * PER_PAGE < tot else "·",
-        callback_data=f"pb:{min(pagine - 1, page + 1)}"))
-    tastiera.append(nav)
+    tastiera.append(_nav_pagine("pb", page, pagine))
     tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
     tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     await _mostra(cb, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
@@ -738,13 +716,7 @@ async def _show_banned_page(cb, page):
 @admin_router.callback_query(F.data.startswith("a:banned"))
 async def cb_banned(cb: CallbackQuery):
     await cb.answer()
-    try:
-        await _show_banned_page(cb, _num(cb.data, 2))
-    except Exception as e:
-        try:
-            await cb.message.answer(f"Errore elenco bannati: {type(e).__name__}: {e}")
-        except Exception:
-            pass
+    await _show_banned_page(cb, _num(cb.data, 2))
 
 
 # ==================== LOG ATTIVITA ====================
@@ -1276,7 +1248,7 @@ async def bulk_sel(cb: CallbackQuery):
     if cid not in BULK:
         return await cb.answer("Riepilogo scaduto", show_alert=True)
     testo, kbd = _bulk_page(cid, 0)
-    await _edit(cb.message, testo, kbd)
+    await _mostra(cb, testo, kbd)
 
 
 @admin_router.callback_query(F.data.startswith("a:bpg:"))
@@ -1286,7 +1258,7 @@ async def bulk_page(cb: CallbackQuery):
     if cid not in BULK:
         return await cb.answer("Riepilogo scaduto", show_alert=True)
     testo, kbd = _bulk_page(cid, int(page))
-    await _edit(cb.message, testo, kbd)
+    await _mostra(cb, testo, kbd)
 
 
 @admin_router.callback_query(F.data.startswith("a:btg:"))
@@ -1302,7 +1274,7 @@ async def bulk_toggle(cb: CallbackQuery):
     else:
         d["sel"].add(i)
     testo, kbd = _bulk_page(cid, int(page))
-    await _edit(cb.message, testo, kbd)
+    await _mostra(cb, testo, kbd)
 
 
 @admin_router.callback_query(F.data.startswith("a:ball:"))
@@ -1312,7 +1284,7 @@ async def bulk_back(cb: CallbackQuery):
     if cid not in BULK:
         return await cb.answer("Riepilogo scaduto", show_alert=True)
     testo, kbd = _bulk_summary(cid)
-    await _edit(cb.message, testo, kbd)
+    await _mostra(cb, testo, kbd)
 
 
 async def _bulk_test(msg, ids):
@@ -1731,9 +1703,9 @@ async def _show_admins(cb):
         ])
     tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
     tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    await _edit(cb.message,
-                f"👑 Proprietario: {len(proprietari)} · 🛡 Admin: {len(altri) + len(nomi)}",
-                InlineKeyboardMarkup(inline_keyboard=tastiera))
+    await _mostra(cb,
+                  f"👑 Proprietario: {len(proprietari)} · 🛡 Admin: {len(altri) + len(nomi)}",
+                  InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
 @admin_router.callback_query(F.data == "a:alladmins")
