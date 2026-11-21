@@ -91,6 +91,19 @@ class NotCommand(BaseFilter):
         return not t.startswith("/")
 
 
+def _nav(back):
+    return [[B(text="⬅️ Indietro", callback_data=back)],
+            [B(text="🏠 Menu", callback_data="a:menu")]]
+
+
+def nav(back):
+    return K(inline_keyboard=_nav(back))
+
+
+def nav_extra(back):
+    return _nav(back)
+
+
 def user_kb(days):
     return K(inline_keyboard=[[B(text="Ricevi una lista", callback_data="u:get")]])
 
@@ -119,7 +132,8 @@ def free_kinds():
         [B(text="🌐 Solo Xtream", callback_data="a:freextream")],
         [B(text="📡 Solo Stalker", callback_data="a:freestalker")],
         [B(text="📚 Tutte", callback_data="a:freeall")],
-        [B(text="⬅️ Menu", callback_data="a:menu")],
+        [B(text="⬅️ Indietro", callback_data="a:menu")],
+        [B(text="🏠 Menu", callback_data="a:menu")],
     ])
 
 
@@ -130,40 +144,50 @@ def kinds():
         [B(text="📡 Stalker Portal", callback_data="a:k:stalker")],
         [B(text="📷 Aggiungi foto/txt", callback_data="a:k:bulk")],
         [B(text="⬅️ Indietro", callback_data="a:menu")],
+        [B(text="🏠 Menu", callback_data="a:menu")],
     ])
 
 
-def confirm(cid):
+def confirm(cid, back="a:add"):
     return K(inline_keyboard=[
         [B(text="🧪 TESTA E SALVA", callback_data=f"a:ok:{cid}")],
+        [B(text="⬅️ Indietro", callback_data=back)],
+        [B(text="🏠 Menu", callback_data="a:menu")],
         [B(text="❌ Annulla", callback_data="a:cancel")],
     ])
 
 
-def doppione(cid):
+def doppione(cid, back="a:add"):
     return K(inline_keyboard=[
         [B(text="✅ AGGIUNGI COMUNQUE", callback_data=f"a:ok:{cid}")],
+        [B(text="⬅️ Indietro", callback_data=back)],
+        [B(text="🏠 Menu", callback_data="a:menu")],
         [B(text="❌ Annulla", callback_data="a:cancel")],
     ])
 
 
-def force(cid):
+def force(cid, back="a:add"):
     return K(inline_keyboard=[
         [B(text="✅ INSERISCI UGUALMENTE", callback_data=f"a:force:{cid}")],
+        [B(text="⬅️ Indietro", callback_data=back)],
+        [B(text="🏠 Menu", callback_data="a:menu")],
         [B(text="❌ Annulla", callback_data="a:cancel")],
     ])
 
 
-def multiplo(cid):
+def multiplo(cid, back="a:add"):
     return K(inline_keyboard=[
         [B(text="✅ CONFERMA", callback_data=f"a:mok:{cid}")],
         [B(text="🔁 RICOMINCIA", callback_data=f"a:mredo:{cid}")],
+        [B(text="⬅️ Indietro", callback_data=back)],
+        [B(text="🏠 Menu", callback_data="a:menu")],
         [B(text="❌ Annulla", callback_data="a:cancel")],
     ])
 
 
 def back():
-    return K(inline_keyboard=[[B(text="⬅️ Menu", callback_data="a:menu")]])
+    return K(inline_keyboard=[[B(text="⬅️ Indietro", callback_data="a:menu")],
+                              [B(text="🏠 Menu", callback_data="a:menu")]])
 
 
 def settings_kb(cooldown, proof, enabled, gonly, group_id):
@@ -177,13 +201,18 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id):
         [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
         [B(text="✏️ Testo benvenuto", callback_data="s:wel"), B(text="✏️ Testo rifiuto", callback_data="s:deny")],
         [B(text="✏️ Testo blocco", callback_data="s:ntext")],
-        [B(text="⬅️ Menu", callback_data="a:menu")],
+        [B(text="⬅️ Indietro", callback_data="a:menu")],
+        [B(text="🏠 Menu", callback_data="a:menu")],
     ])
 
 
 def user_row(uid, banned):
     return [B(text=("✅ Sblocca" if banned else "🚫 Banna"),
               callback_data=f"u:{'unban' if banned else 'ban'}:{uid}")]
+
+
+def open_row(uid):
+    return B(text="💬 Apri chat", url=f"tg://user?id={uid}")
 
 
 async def member_ok(bot, uid):
