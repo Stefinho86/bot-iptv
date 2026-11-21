@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1 \
     MEDIA_DIR=/tmp/media
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg ca-certificates curl \
+        ffmpeg ca-certificates curl tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
