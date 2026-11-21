@@ -211,8 +211,14 @@ def user_row(uid, banned):
               callback_data=f"u:{'unban' if banned else 'ban'}:{uid}")]
 
 
-def open_row(uid):
-    return B(text="💬 Apri chat", url=f"tg://user?id={uid}")
+def chat_url(uid, username=None):
+    if username:
+        return f"https://t.me/{username}"
+    return f"tg://user?id={uid}"
+
+
+def open_row(uid, username=None):
+    return B(text="💬 Apri chat", url=chat_url(uid, username))
 
 
 async def member_ok(bot, uid):
