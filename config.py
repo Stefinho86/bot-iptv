@@ -1,5 +1,13 @@
 import os
+import time
 from pathlib import Path
+
+TZ_NAME = os.environ.get("TZ_NAME", "Europe/Rome")
+os.environ["TZ"] = TZ_NAME
+try:
+    time.tzset()
+except Exception:
+    pass
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
