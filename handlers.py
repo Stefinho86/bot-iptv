@@ -145,6 +145,18 @@ async def _edit(target, testo, kbd=None):
             return False
 
 
+async def _mostra(cb, testo, kbd=None):
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    try:
+        await cb.message.answer(testo, reply_markup=kbd)
+        return True
+    except Exception:
+        return await _edit(cb.message, testo, kbd)
+
+
 def _forwarded_uid(msg):
     fo = getattr(msg, "forward_origin", None)
     if fo is not None:
@@ -620,9 +632,13 @@ async def cb_noop(cb: CallbackQuery):
 
 @admin_router.callback_query(F.data.startswith("pu:"))
 async def pg_users(cb: CallbackQuery):
-    await cb.answer()
+    page = _num(cb.data, 1)
     try:
-        await _show_users_page(cb, _num(cb.data, 1))
+        await cb.answer(f"Pagina {page + 1}")
+    except Exception:
+        pass
+    try:
+        await _show_users_page(cb, page)
     except Exception as e:
         try:
             await cb.message.answer(f"Errore pagina utenti: {type(e).__name__}: {e}")
@@ -632,9 +648,13 @@ async def pg_users(cb: CallbackQuery):
 
 @admin_router.callback_query(F.data.startswith("pb:"))
 async def pg_banned(cb: CallbackQuery):
-    await cb.answer()
+    page = _num(cb.data, 1)
     try:
-        await _show_banned_page(cb, _num(cb.data, 1))
+        await cb.answer(f"Pagina {page + 1}")
+    except Exception:
+        pass
+    try:
+        await _show_banned_page(cb, page)
     except Exception as e:
         try:
             await cb.message.answer(f"Errore pagina bannati: {type(e).__name__}: {e}")
@@ -645,7 +665,7 @@ async def pg_banned(cb: CallbackQuery):
 async def _show_users_page(cb, page):
     tot = await db.count_users(config.SUPER_ADMINS)
     if not tot:
-        return await _edit(cb.message, "Nessun utente normale registrato.", kb.nav("a:menu"))
+        return await _mostra(cb, "Nessun utente normale registrato.", kb.nav("a:menu"))
     pagine = max(1, (tot - 1) // PER_PAGE + 1)
     page = max(0, min(page, pagine - 1))
     righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
@@ -668,10 +688,10 @@ async def _show_users_page(cb, page):
     tastiera.append(nav)
     tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
     tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    await _edit(cb.message,
-                f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
-                f"Tocca nome o @utente per aprire la chat.",
-                InlineKeyboardMarkup(inline_keyboard=tastiera))
+    await _mostra(cb,
+                  f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
+                  f"Tocca nome o @utente per aprire la chat.",
+                  InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
 @admin_router.callback_query(F.data.startswith("a:allusers"))
@@ -689,7 +709,7 @@ async def cb_allusers(cb: CallbackQuery):
 async def _show_banned_page(cb, page):
     tot = await db.count_banned()
     if not tot:
-        return await _edit(cb.message, "Nessun utente bannato.", kb.nav("a:menu"))
+        return await _mostra(cb, "Nessun utente bannato.", kb.nav("a:menu"))
     pagine = max(1, (tot - 1) // PER_PAGE + 1)
     page = max(0, min(page, pagine - 1))
     righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
@@ -711,8 +731,8 @@ async def _show_banned_page(cb, page):
     tastiera.append(nav)
     tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
     tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    await _edit(cb.message, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
-                InlineKeyboardMarkup(inline_keyboard=tastiera))
+    await _mostra(cb, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
+                  InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
 @admin_router.callback_query(F.data.startswith("a:banned"))
@@ -1374,7 +1394,7 @@ async def _show_free(cb, kind, page):
     per_page = 5
     tot = await db.count_free_kind(kind)
     if not tot:
-        await _edit(cb.message, "Nessuna lista libera di questo tipo.", kb.admin_menu())
+        await _mostra(cb, "Nessuna lista libera di questo tipo.", kb.admin_menu())
         return
     pagine = max(1, (tot - 1) // per_page + 1)
     page = max(0, min(page, pagine - 1))
@@ -1416,8 +1436,8 @@ async def _show_free(cb, kind, page):
                                           callback_data=f"a:ddel:{kind or 'all'}:{page}")])
     coda.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:free")])
     coda.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    await _edit(cb.message, "\n\n".join(blocchi),
-                InlineKeyboardMarkup(inline_keyboard=[nav] + bottoni + coda))
+    await _mostra(cb, "\n\n".join(blocchi),
+                  InlineKeyboardMarkup(inline_keyboard=[nav] + bottoni + coda))
 
 
 @admin_router.callback_query(F.data.in_({"a:freem3u", "a:freextream", "a:freestalker", "a:freeall"}))
