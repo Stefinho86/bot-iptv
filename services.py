@@ -140,6 +140,57 @@ def preview(item):
     return f"Tipo: M3U\nURL: <code>{p['url']}</code>"
 
 
+# ---------- confronto doppioni ----------
+def _host_norm(valore):
+    s = (valore or "").strip().lower()
+    s = re.sub(r"^[a-z]+://", "", s)
+    s = s.split("/")[0]
+    if "@" in s:
+        s = s.split("@", 1)[1]
+    s = s.split(":")[0]
+    return s.strip(".")
+
+
+def _url_norm(u):
+    s = (u or "").strip().lower()
+    s = re.sub(r"^[a-z]+://", "", s).rstrip("/")
+    host, _, resto = s.partition("/")
+    host = host.split(":")[0]
+    if "@" in host:
+        host = host.split("@", 1)[1]
+    utente = password = ""
+    for parte in re.split(r"[?&]", resto):
+        if parte.startswith("username="):
+            utente = parte.split("=", 1)[1]
+        elif parte.startswith("password="):
+            password = parte.split("=", 1)[1]
+    return f"{host}|{resto.split('?')[0]}|{utente}|{password}"
+
+
+def chiavi_lista(kind, p):
+    out = set()
+    if kind == "xtream":
+        h = _host_norm(p.get("server"))
+        u = (p.get("username") or "").strip().lower()
+        w = (p.get("password") or "").strip().lower()
+        if h and u:
+            out.add(f"xt|{h}|{u}")
+        if u and w:
+            out.add(f"xp|{u}|{w}")
+    elif kind == "stalker":
+        h = _host_norm(p.get("portal"))
+        m = (p.get("mac") or "").replace("-", ":").upper()
+        if m:
+            out.add(f"sm|{m}")
+        if h and m:
+            out.add(f"sp|{h}|{m}")
+    else:
+        u = _url_norm(p.get("url"))
+        if u.strip("|"):
+            out.add("m3u|" + u)
+    return out
+
+
 class Result:
     def __init__(self, ok, note="", frame=None, info=""):
         self.ok, self.note, self.frame, self.info = ok, note, frame, info
