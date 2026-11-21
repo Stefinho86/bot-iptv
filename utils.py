@@ -154,6 +154,14 @@ def force(cid):
     ])
 
 
+def multiplo(cid):
+    return K(inline_keyboard=[
+        [B(text="✅ CONFERMA", callback_data=f"a:mok:{cid}")],
+        [B(text="🔁 RICOMINCIA", callback_data=f"a:mredo:{cid}")],
+        [B(text="❌ Annulla", callback_data="a:cancel")],
+    ])
+
+
 def back():
     return K(inline_keyboard=[[B(text="⬅️ Menu", callback_data="a:menu")]])
 
