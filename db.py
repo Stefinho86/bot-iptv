@@ -9,6 +9,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS admins(
   user_id BIGINT PRIMARY KEY, username TEXT, added_by BIGINT, added_at TIMESTAMPTZ NOT NULL);
 
+CREATE TABLE IF NOT EXISTS admin_names(
+  username TEXT PRIMARY KEY, added_by BIGINT, added_at TIMESTAMPTZ NOT NULL);
+
 CREATE TABLE IF NOT EXISTS users(
   user_id BIGINT PRIMARY KEY, username TEXT, full_name TEXT, first_seen TIMESTAMPTZ NOT NULL,
   last_request TIMESTAMPTZ, next_available TIMESTAMPTZ,
@@ -25,7 +28,7 @@ CREATE TABLE IF NOT EXISTS assignments(
 
 CREATE TABLE IF NOT EXISTS anon_verified(
   chat_id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, verified_at TIMESTAMPTZ NOT NULL);
-  
+
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 
 CREATE TABLE IF NOT EXISTS logs(
@@ -48,7 +51,7 @@ DEFAULTS = {
     "welcome": "Ciao {name}!\n\nPremi il pulsante per ricevere una lista IPTV. Una lista ogni {days} giorni.",
     "deny_text": "Hai gia ricevuto una lista. Potrai richiederne un'altra <b>{when}</b> (tra {left}).",
     "no_lists": "Al momento non ci sono liste disponibili. Riprova piu tardi.",
-    "broken_all": "Ho trovato solo liste non funzionanti. Avvisa un admin.",
+    "broken_all": "Nessuna lista ha superato il test. Avvisa un admin.",
 }
 
 _pool = None
@@ -80,6 +83,14 @@ async def log(actor, action, detail=""):
                         now(), actor, action, detail)
 
 
+async def all_logs(limit=3000):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT g.id, g.ts, g.actor, g.action, g.detail, u.username, u.full_name "
+            "FROM logs g LEFT JOIN users u ON u.user_id = g.actor "
+            "ORDER BY g.id DESC LIMIT $1", limit)
+
+
 async def get_setting(key):
     async with _pool.acquire() as c:
         val = await c.fetchval("SELECT value FROM settings WHERE key=$1", key)
@@ -109,23 +120,9 @@ async def set_setting(key, value):
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
 
 
-_NAMES_OK = False
-
-
-async def _ensure_names():
-    global _NAMES_OK
-    if _NAMES_OK:
-        return
-    async with _pool.acquire() as c:
-        await c.execute("CREATE TABLE IF NOT EXISTS admin_names("
-                        "username TEXT PRIMARY KEY, added_by BIGINT, added_at TIMESTAMPTZ)")
-    _NAMES_OK = True
-
-
 async def is_admin(uid, username=None):
     if uid in config.SUPER_ADMINS:
         return True
-    await _ensure_names()
     async with _pool.acquire() as c:
         if await c.fetchval("SELECT 1 FROM admins WHERE user_id=$1", uid) is not None:
             return True
@@ -136,21 +133,18 @@ async def is_admin(uid, username=None):
 
 
 async def add_admin_name(username, by):
-    await _ensure_names()
     async with _pool.acquire() as c:
         await c.execute("INSERT INTO admin_names(username,added_by,added_at) VALUES($1,$2,$3) "
                         "ON CONFLICT(username) DO NOTHING", username.lstrip("@"), by, now())
 
 
 async def del_admin_name(username):
-    await _ensure_names()
     async with _pool.acquire() as c:
         await c.execute("DELETE FROM admin_names WHERE lower(username)=lower($1)",
                         username.lstrip("@"))
 
 
 async def list_admin_names():
-    await _ensure_names()
     async with _pool.acquire() as c:
         return await c.fetch("SELECT username FROM admin_names ORDER BY added_at")
 
@@ -170,11 +164,13 @@ async def list_admins():
     async with _pool.acquire() as c:
         return await c.fetch("SELECT user_id, username FROM admins ORDER BY added_at")
 
+
 async def set_anon_verified(chat_id, user_id):
     async with _pool.acquire() as c:
         await c.execute("INSERT INTO anon_verified(chat_id,user_id,verified_at) VALUES($1,$2,$3) "
                         "ON CONFLICT(chat_id) DO UPDATE SET user_id=excluded.user_id, "
                         "verified_at=excluded.verified_at", chat_id, user_id, now())
+
 
 async def get_anon_verified(chat_id):
     async with _pool.acquire() as c:
@@ -195,8 +191,16 @@ async def touch_user(uid, username, full_name):
     async with _pool.acquire() as c:
         await c.execute(
             "INSERT INTO users(user_id,username,full_name,first_seen) VALUES($1,$2,$3,$4) "
-            "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name",
-            uid, username, full_name, now())
+            "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, "
+            "full_name=excluded.full_name", uid, username, full_name, now())
+        if username:
+            migrato = await c.fetchval(
+                "DELETE FROM admin_names WHERE lower(username)=lower($1) RETURNING username",
+                username)
+            if migrato:
+                await c.execute(
+                    "INSERT INTO admins(user_id,username,added_at) VALUES($1,$2,$3) "
+                    "ON CONFLICT(user_id) DO NOTHING", uid, username, now())
 
 
 async def get_user(uid):
@@ -233,6 +237,17 @@ async def find_users(q):
             q2, f"%{q2}%")
 
 
+async def find_by_username(name):
+    async with _pool.acquire() as c:
+        return await c.fetchval("SELECT user_id FROM users WHERE username ILIKE $1 LIMIT 1", name)
+
+
+async def ensure_user(uid):
+    async with _pool.acquire() as c:
+        await c.execute("INSERT INTO users(user_id,first_seen) VALUES($1,$2) "
+                        "ON CONFLICT(user_id) DO NOTHING", uid, now())
+
+
 async def add_list(kind, payload, label, by):
     async with _pool.acquire() as c:
         return await c.fetchval(
@@ -243,12 +258,7 @@ async def add_list(kind, payload, label, by):
 async def set_test(lid, ok, note):
     async with _pool.acquire() as c:
         await c.execute("UPDATE lists SET tested=TRUE, test_ok=$1, test_note=$2 WHERE id=$3",
-                        ok, note[:400], lid)
-
-
-async def mark_broken(lid):
-    async with _pool.acquire() as c:
-        await c.execute("UPDATE lists SET status='broken' WHERE id=$1", lid)
+                        ok, (note or "")[:400], lid)
 
 
 async def free_count():
@@ -259,6 +269,12 @@ async def free_count():
 async def random_free():
     async with _pool.acquire() as c:
         return await c.fetchrow("SELECT * FROM lists WHERE status='free' ORDER BY random() LIMIT 1")
+
+
+async def random_free_ok():
+    async with _pool.acquire() as c:
+        return await c.fetchrow(
+            "SELECT * FROM lists WHERE status='free' AND test_ok=TRUE ORDER BY random() LIMIT 1")
 
 
 async def free_lists(limit=15):
@@ -312,7 +328,6 @@ async def stats():
         for label, sql in (
             ("free", "SELECT COUNT(*) FROM lists WHERE status='free'"),
             ("assigned", "SELECT COUNT(*) FROM lists WHERE status='assigned'"),
-            ("broken", "SELECT COUNT(*) FROM lists WHERE status='broken'"),
             ("users", "SELECT COUNT(*) FROM users"),
             ("banned", "SELECT COUNT(*) FROM users WHERE banned=TRUE"),
         ):
@@ -325,15 +340,6 @@ async def all_free_payloads():
         rows = await c.fetch("SELECT id,kind,payload,label,added_at FROM lists WHERE status='free'")
         return [{**dict(r), "added_at": r["added_at"].isoformat()} for r in rows]
 
-async def find_by_username(name):
-    async with _pool.acquire() as c:
-        return await c.fetchval("SELECT user_id FROM users WHERE username ILIKE $1 LIMIT 1", name)
-
-
-async def ensure_user(uid):
-    async with _pool.acquire() as c:
-        await c.execute("INSERT INTO users(user_id,first_seen) VALUES($1,$2) "
-                        "ON CONFLICT(user_id) DO NOTHING", uid, now())
 
 async def all_users(offset, limit, escludi):
     async with _pool.acquire() as c:
@@ -341,6 +347,8 @@ async def all_users(offset, limit, escludi):
             "SELECT user_id, username, full_name, banned FROM users "
             "WHERE user_id <> ALL($3::bigint[]) "
             "AND user_id NOT IN (SELECT user_id FROM admins) "
+            "AND (username IS NULL OR lower(username) NOT IN "
+            "     (SELECT lower(username) FROM admin_names)) "
             "ORDER BY first_seen DESC OFFSET $1 LIMIT $2",
             offset, limit, list(escludi))
 
@@ -349,7 +357,9 @@ async def count_users(escludi):
     async with _pool.acquire() as c:
         return await c.fetchval(
             "SELECT COUNT(*) FROM users WHERE user_id <> ALL($1::bigint[]) "
-            "AND user_id NOT IN (SELECT user_id FROM admins)", list(escludi))
+            "AND user_id NOT IN (SELECT user_id FROM admins) "
+            "AND (username IS NULL OR lower(username) NOT IN "
+            "     (SELECT lower(username) FROM admin_names))", list(escludi))
 
 
 async def banned_users(offset, limit):
@@ -367,6 +377,7 @@ async def count_banned():
 async def all_admins():
     async with _pool.acquire() as c:
         return await c.fetch("SELECT user_id, username FROM admins ORDER BY added_at")
+
 
 async def get_list(lid):
     async with _pool.acquire() as c:
@@ -390,10 +401,12 @@ async def count_free_kind(kind):
             return await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free' AND kind=$1", kind)
         return await c.fetchval("SELECT COUNT(*) FROM lists WHERE status='free'")
 
+
 async def set_payload(lid, payload):
     async with _pool.acquire() as c:
         await c.execute("UPDATE lists SET payload=$1 WHERE id=$2",
                         json.dumps(payload, ensure_ascii=False), lid)
+
 
 async def del_list(lid):
     async with _pool.acquire() as c:
