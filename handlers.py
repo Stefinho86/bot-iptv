@@ -585,12 +585,24 @@ async def _ask_confirm(target, state: FSMContext, item):
     cid = uuid.uuid4().hex[:10]
     TMP[cid] = item
     await state.set_state(Add.confirm)
-    text = f"Confermi questo inserimento?\n\n{preview(item)}"
+    dup = await db.lista_simile(item["kind"], item["payload"])
+    if dup:
+        vecchio = {"kind": dup["kind"], "payload": json.loads(dup["payload"])}
+        stato = {"free": "libera", "assigned": "già assegnata"}.get(dup["status"], dup["status"])
+        text = (f"⚠️ <b>Attenzione: lista già presente</b>\n\n"
+                f"Corrisponde alla lista <b>#{dup['id']}</b> ({stato}):\n"
+                f"{preview(vecchio)}\n\n"
+                f"──────────\n\n<b>Stai inserendo:</b>\n{preview(item)}\n\n"
+                f"La aggiungo lo stesso?")
+        kbd = kb.doppione(cid)
+    else:
+        text = f"Confermi questo inserimento?\n\n{preview(item)}"
+        kbd = kb.confirm(cid)
     if isinstance(target, CallbackQuery):
-        await target.message.edit_text(text, reply_markup=kb.confirm(cid))
+        await target.message.edit_text(text, reply_markup=kbd)
         await target.answer()
     else:
-        await target.answer(text, reply_markup=kb.confirm(cid))
+        await target.answer(text, reply_markup=kbd)
 
 
 @admin_router.message(Add.m3u, F.text)
@@ -731,8 +743,12 @@ def _bulk_summary(cid):
     anteprima = "\n".join(_bulk_line(n, it) for n, it in enumerate(items[:10], 1))
     extra = f"\n… e altre {len(items) - 10}" if len(items) > 10 else ""
     dup = f" ({d['dup']} duplicate scartate)" if d.get("dup") else ""
+    gia = ""
+    if d.get("dub"):
+        gia = (f"\n⚠️ <b>{len(d['dub'])}</b> risultano già in archivio: sono "
+               f"deselezionate, riattivabili da «Scegli quali».")
     testo = (f"Ho letto il contenuto e riconosciuto <b>{len(items)}</b> liste valide{dup}:\n"
-             f"{righe}\n\n<b>Anteprima</b>\n{anteprima}{extra}\n\n"
+             f"{righe}\n\n<b>Anteprima</b>\n{anteprima}{extra}{gia}\n\n"
              f"Posso salvarle tutte, oppure scegli tu quali tenere.")
     kbd = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✅ SALVA TUTTE ({len(items)})", callback_data=f"a:bok:{cid}")],
@@ -746,13 +762,17 @@ def _bulk_page(cid, page):
     d = BULK[cid]
     items = d["items"]
     sel = d["sel"]
+    dub = d.get("dub") or set()
     pagine = max(1, (len(items) - 1) // BULK_PER_PAGE + 1)
     page = max(0, min(page, pagine - 1))
     inizio = page * BULK_PER_PAGE
-    righe = [_bulk_line(i + 1, items[i])
-             for i in range(inizio, min(inizio + BULK_PER_PAGE, len(items)))]
+    righe = []
+    for i in range(inizio, min(inizio + BULK_PER_PAGE, len(items))):
+        segno = "🔁 " if i in dub else ""
+        righe.append(segno + _bulk_line(i + 1, items[i]))
     testo = (f"<b>Scegli quali salvare</b> — pagina {page + 1}/{pagine}\n"
-             f"Selezionate: {len(sel)} su {len(items)}\n\n" + "\n".join(righe))
+             f"Selezionate: {len(sel)} su {len(items)}\n"
+             f"🔁 = già presente in archivio\n\n" + "\n".join(righe))
     kbd = []
     for i in range(inizio, min(inizio + BULK_PER_PAGE, len(items))):
         kbd.append([InlineKeyboardButton(text=("✅ " if i in sel else "⬜ ") + str(i + 1),
@@ -811,8 +831,14 @@ async def bulk_input(msg: Message, state: FSMContext):
         visti.add(chiave)
         items.append(it)
 
+    gia = set()
+    for i, it in enumerate(items):
+        if await db.lista_simile(it["kind"], it["payload"]):
+            gia.add(i)
+
     cid = uuid.uuid4().hex[:10]
-    BULK[cid] = {"items": items, "sel": set(range(len(items))), "dup": dup}
+    BULK[cid] = {"items": items, "sel": set(range(len(items))) - gia,
+                 "dup": dup, "dub": gia}
     await state.set_state(Add.confirm)
     testo_rip, kbd = _bulk_summary(cid)
     await msg.answer(testo_rip, reply_markup=kbd)
