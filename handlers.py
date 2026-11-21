@@ -14,7 +14,8 @@ from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (Message, CallbackQuery, FSInputFile,
-                           InlineKeyboardMarkup, InlineKeyboardButton)
+                           InlineKeyboardMarkup, InlineKeyboardButton,
+                           LinkPreviewOptions)
 
 import db
 import config
@@ -47,6 +48,8 @@ MAX_ANTEPRIMA = 15
 PER_PAGE = 10
 
 NONMOD = object()
+
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 class Add(StatesGroup):
@@ -157,15 +160,27 @@ def _voce(n, r, bannato=False, motivo=None):
             f"      {utente} · ID <code>{r['user_id']}</code>{coda}")
 
 
+def _etichetta_btn(n, r):
+    """Testo del pulsante: numero, nome, username e ID. ID mai tagliato."""
+    nome = _nome(r)
+    if len(nome) > 16:
+        nome = nome[:15] + "…"
+    u = _pulisci_user(r["username"])
+    utente = f"@{u}" if u else "no user"
+    if len(utente) > 12:
+        utente = utente[:11] + "…"
+    return f"{n}. {nome} · {utente} · {r['user_id']}"
+
+
 async def _edit(target, testo, kbd=None):
     try:
-        await target.edit_text(testo, reply_markup=kbd)
+        await target.edit_text(testo, reply_markup=kbd, link_preview_options=NO_PREVIEW)
         return True
     except Exception as e:
         if "not modified" in str(e).lower():
             return True
         try:
-            await target.answer(testo, reply_markup=kbd)
+            await target.answer(testo, reply_markup=kbd, link_preview_options=NO_PREVIEW)
             return True
         except Exception:
             return False
@@ -174,14 +189,14 @@ async def _edit(target, testo, kbd=None):
 async def _mostra(cb, testo, kbd=None):
     errore = None
     try:
-        await cb.message.edit_text(testo, reply_markup=kbd)
+        await cb.message.edit_text(testo, reply_markup=kbd, link_preview_options=NO_PREVIEW)
         return True
     except Exception as e:
         errore = e
         if "not modified" in str(e).lower():
             return True
     try:
-        await cb.message.answer(testo, reply_markup=kbd)
+        await cb.message.answer(testo, reply_markup=kbd, link_preview_options=NO_PREVIEW)
         return True
     except Exception as e:
         errore = e
@@ -197,18 +212,21 @@ async def _pubblica(msg, testo, kbd_url, kbd_senza_url, edit=True):
     None se mostrata, NONMOD se identica, altrimenti l'eccezione."""
     if edit:
         try:
-            await msg.edit_text(testo, reply_markup=kbd_url)
+            await msg.edit_text(testo, reply_markup=kbd_url,
+                                link_preview_options=NO_PREVIEW)
             return None
         except Exception as e:
             if "not modified" in str(e).lower():
                 return NONMOD
     try:
-        await msg.edit_text(testo, reply_markup=kbd_senza_url)
+        await msg.edit_text(testo, reply_markup=kbd_senza_url,
+                            link_preview_options=NO_PREVIEW)
         return None
     except Exception:
         pass
     try:
-        await msg.answer(testo, reply_markup=kbd_senza_url)
+        await msg.answer(testo, reply_markup=kbd_senza_url,
+                         link_preview_options=NO_PREVIEW)
         return None
     except Exception as e:
         return e
@@ -479,20 +497,19 @@ async def _mostra_utenti(msg, page, edit=True, cb=None, nota="", ok_testo=""):
             bannato = bool(r["banned"])
             link = _link(r["user_id"], r["username"])
             azione = f"lb:{'unban' if bannato else 'ban'}:{r['user_id']}:{page}"
+            segno = "♻️" if bannato else "🚫"
             voci.append(_voce(n, r, bannato))
             con_url.append([
-                InlineKeyboardButton(text=f"💬 {n}", url=link),
-                InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
-                                     callback_data=azione),
+                InlineKeyboardButton(text=_etichetta_btn(n, r), url=link),
+                InlineKeyboardButton(text=segno, callback_data=azione),
             ])
             senza_url.append([
-                InlineKeyboardButton(text=f"💬 {n}", callback_data="a:noop"),
-                InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
-                                     callback_data=azione),
+                InlineKeyboardButton(text=_etichetta_btn(n, r), callback_data="a:noop"),
+                InlineKeyboardButton(text=segno, callback_data=azione),
             ])
         coda = "" if pagine > 1 else "\nUnica pagina."
         testo = (f"👤 Utenti normali: {tot} — pagina {page + 1} di {pagine}{coda}\n"
-                 f"Tocca il nome o «💬 n» per aprire la chat.\n\n" + "\n\n".join(voci))
+                 f"Tocca il numero o il nome per aprire la chat.\n\n" + "\n\n".join(voci))
         errore = await _pubblica(
             msg, testo,
             InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:u", page, pagine)),
@@ -522,16 +539,16 @@ async def _mostra_bannati(msg, page, edit=True, cb=None, nota="", ok_testo=""):
             azione = f"lb:unban:{r['user_id']}:{page}"
             voci.append(_voce(n, r, True, r["ban_reason"] or "senza motivo"))
             con_url.append([
-                InlineKeyboardButton(text=f"💬 {n}", url=link),
-                InlineKeyboardButton(text="Sblocca", callback_data=azione),
+                InlineKeyboardButton(text=_etichetta_btn(n, r), url=link),
+                InlineKeyboardButton(text="♻️", callback_data=azione),
             ])
             senza_url.append([
-                InlineKeyboardButton(text=f"💬 {n}", callback_data="a:noop"),
-                InlineKeyboardButton(text="Sblocca", callback_data=azione),
+                InlineKeyboardButton(text=_etichetta_btn(n, r), callback_data="a:noop"),
+                InlineKeyboardButton(text="♻️", callback_data=azione),
             ])
         coda = "" if pagine > 1 else "\nUnica pagina."
         testo = (f"🚫 Utenti bannati: {tot} — pagina {page + 1} di {pagine}{coda}\n"
-                 f"Tocca il nome o «💬 n» per aprire la chat.\n\n" + "\n\n".join(voci))
+                 f"Tocca il numero o il nome per aprire la chat.\n\n" + "\n\n".join(voci))
         errore = await _pubblica(
             msg, testo,
             InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:n", page, pagine)),
