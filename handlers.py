@@ -30,6 +30,7 @@ user_router = Router()
 BUSY = set()
 TMP = {}
 BULK = {}
+MULTI = {}
 DSEL = {}
 
 MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
@@ -158,6 +159,62 @@ async def _stato_text(msg, bot):
     return (f"Gruppo configurato: <code>{gid}</code>\n"
             f"Filtro gruppo: {'ON' if gonly else 'OFF (tutti passano)'}\n"
             f"Bot: {'attivo' if en else 'spento'}\nTu: {tu}")
+
+
+def _blocchi(testo):
+    fuori, corrente = [], []
+    for riga in (testo or "").splitlines():
+        if riga.strip():
+            corrente.append(riga.strip())
+        elif corrente:
+            fuori.append(corrente)
+            corrente = []
+    if corrente:
+        fuori.append(corrente)
+    return fuori
+
+
+def _parse_m3u(testo):
+    out = []
+    for riga in (testo or "").splitlines():
+        r = riga.strip()
+        if r.startswith("http"):
+            out.append({"kind": "m3u", "label": r[:40], "payload": {"url": r}})
+    return out
+
+
+def _parse_xtream(testo):
+    out = []
+    for b in _blocchi(testo):
+        if len(b) < 3:
+            continue
+        server = b[0]
+        if not server.startswith("http"):
+            server = "http://" + server
+        if not re.match(r"^https?://[^\s/]+", server):
+            continue
+        out.append({"kind": "xtream", "label": server.rstrip("/"),
+                    "payload": {"server": server.rstrip("/"),
+                                "username": b[1], "password": b[2]}})
+    return out
+
+
+def _parse_stalker(testo):
+    out = []
+    for b in _blocchi(testo):
+        if len(b) < 2:
+            continue
+        portal = b[0]
+        if not portal.startswith("http"):
+            portal = "http://" + portal
+        if not re.match(r"^https?://[^\s/]+", portal):
+            continue
+        mac = b[1].upper().replace("-", ":")
+        if not MAC_RE.match(mac):
+            continue
+        out.append({"kind": "stalker", "label": portal.rstrip("/"),
+                    "payload": {"portal": portal.rstrip("/"), "mac": mac}})
+    return out
 
 
 # ==================== VERIFICA ANONIMI ====================
@@ -545,6 +602,25 @@ async def cb_add(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
+PROMPT = {
+    "m3u": (Add.m3u,
+            "Mandami il link M3U.\n\n"
+            "Va bene qualsiasi forma: <code>.m3u</code>, <code>.m3u8</code>, oppure "
+            "<code>get.php?username=...&amp;password=...&amp;type=m3u_plus</code>.\n"
+            "Puoi anche incollare più link, uno per riga."),
+    "xtream": (Add.x_server,
+               "Mandami indirizzo e porta del pannello.\n\n"
+               "Esempio: <code>http://host:8080</code>\n"
+               "Per più liste: indirizzo, utente e password, una lista ogni tre righe, "
+               "separate da una riga vuota."),
+    "stalker": (Add.s_portal,
+                "Mandami indirizzo e porta del portale.\n\n"
+                "Esempio: <code>http://host:8080/c/</code>\n"
+                "Per più liste: portale e MAC, una lista ogni due righe, "
+                "separate da una riga vuota."),
+}
+
+
 @admin_router.callback_query(F.data.startswith("a:k:"))
 async def cb_kind(cb: CallbackQuery, state: FSMContext):
     kind = cb.data.split(":")[2]
@@ -557,24 +633,9 @@ async def cb_kind(cb: CallbackQuery, state: FSMContext):
             "Riconosco Xtream, M3U e Stalker, scarto le copie e ti mostro cosa ho trovato "
             "prima di salvare." + HINT, reply_markup=kb.back())
         return await cb.answer()
-    if kind == "m3u":
-        await state.set_state(Add.m3u)
-        await cb.message.edit_text(
-            "Mandami il link M3U.\n\n"
-            "Va bene qualsiasi forma: <code>.m3u</code>, <code>.m3u8</code>, oppure "
-            "<code>get.php?username=...&amp;password=...&amp;type=m3u_plus</code>." + HINT,
-            reply_markup=kb.back())
-        return await cb.answer()
-    if kind == "xtream":
-        await state.set_state(Add.x_server)
-        await cb.message.edit_text(
-            "Mandami indirizzo e porta del pannello.\n\n"
-            "Esempio: <code>http://host:8080</code>" + HINT, reply_markup=kb.back())
-        return await cb.answer()
-    await state.set_state(Add.s_portal)
-    await cb.message.edit_text(
-        "Mandami indirizzo e porta del portale.\n\n"
-        "Esempio: <code>http://host:8080/c/</code>" + HINT, reply_markup=kb.back())
+    passo, testo = PROMPT[kind]
+    await state.set_state(passo)
+    await cb.message.edit_text(testo + HINT, reply_markup=kb.back())
     await cb.answer()
 
 
@@ -602,17 +663,39 @@ async def _ask_confirm(target, state: FSMContext, item):
         await target.answer(text, reply_markup=kbd)
 
 
+async def _mostra_multiplo(target, state: FSMContext, kind, items):
+    cid = uuid.uuid4().hex[:10]
+    MULTI[cid] = {"items": items, "kind": kind}
+    await state.set_state(Add.confirm)
+    righe = "\n\n".join(_bulk_line(n, it) for n, it in enumerate(items, 1))
+    testo = (f"Ho riconosciuto <b>{len(items)}</b> liste separate:\n\n{righe}\n\n"
+             f"Sono corrette? Se confermi le salvo tutte, altrimenti rimandamele.")
+    if isinstance(target, CallbackQuery):
+        await target.message.edit_text(testo, reply_markup=kb.multiplo(cid))
+        await target.answer()
+    else:
+        await target.answer(testo, reply_markup=kb.multiplo(cid))
+
+
 @admin_router.message(Add.m3u, F.text)
 async def add_m3u(msg: Message, state: FSMContext):
-    u = (msg.text or "").strip()
-    if not u.startswith("http"):
-        return await msg.answer("Serve un link che inizi con http. Riprova o /annulla.")
-    await _ask_confirm(msg, state, {"kind": "m3u", "label": u[:40], "payload": {"url": u}})
+    fatte = _parse_m3u(msg.text)
+    if len(fatte) > 1:
+        return await _mostra_multiplo(msg, state, "m3u", fatte)
+    if len(fatte) == 1:
+        return await _ask_confirm(msg, state, fatte[0])
+    await msg.answer("Serve un link che inizi con http. Riprova o /annulla.")
 
 
 @admin_router.message(Add.x_server, F.text)
 async def add_x_server(msg: Message, state: FSMContext):
-    s = (msg.text or "").strip()
+    testo = msg.text or ""
+    fatte = _parse_xtream(testo)
+    if len(fatte) > 1:
+        return await _mostra_multiplo(msg, state, "xtream", fatte)
+    if len(fatte) == 1:
+        return await _ask_confirm(msg, state, fatte[0])
+    s = testo.strip()
     if not s.startswith("http"):
         s = "http://" + s
     if not re.match(r"^https?://[^\s/]+", s):
@@ -645,7 +728,13 @@ async def add_x_pass(msg: Message, state: FSMContext):
 
 @admin_router.message(Add.s_portal, F.text)
 async def add_s_portal(msg: Message, state: FSMContext):
-    s = (msg.text or "").strip()
+    testo = msg.text or ""
+    fatte = _parse_stalker(testo)
+    if len(fatte) > 1:
+        return await _mostra_multiplo(msg, state, "stalker", fatte)
+    if len(fatte) == 1:
+        return await _ask_confirm(msg, state, fatte[0])
+    s = testo.strip()
     if not s.startswith("http"):
         s = "http://" + s
     if not re.match(r"^https?://[^\s/]+", s):
@@ -672,6 +761,36 @@ async def add_foto_reject(msg: Message):
     await msg.answer("Qui accetto solo testo o copia-incolla.\n"
                      "Per una foto o un file usa /aggiungi e scegli «Aggiungi foto/txt».",
                      reply_markup=kb.back())
+
+
+@admin_router.callback_query(F.data.startswith("a:mok:"))
+async def multi_ok(cb: CallbackQuery, state: FSMContext):
+    cid = cb.data.split(":")[2]
+    d = MULTI.pop(cid, None)
+    await state.clear()
+    if not d:
+        return await cb.answer("Elenco scaduto, rimanda le liste", show_alert=True)
+    await cb.message.edit_text(f"Salvo {len(d['items'])} liste...")
+    ids = []
+    for it in d["items"]:
+        lid = await db.add_list(it["kind"], it["payload"], it.get("label") or "-", cb.from_user.id)
+        ids.append(lid)
+    await db.log(cb.from_user.id, "bulk_add", str(len(ids)))
+    await cb.message.edit_text(f"Salvate {len(ids)} liste. Test in corso...")
+    asyncio.create_task(_bulk_test(cb.message, ids))
+    await cb.answer()
+
+
+@admin_router.callback_query(F.data.startswith("a:mredo:"))
+async def multi_redo(cb: CallbackQuery, state: FSMContext):
+    cid = cb.data.split(":")[2]
+    d = MULTI.pop(cid, None)
+    if not d:
+        return await cb.answer("Elenco scaduto", show_alert=True)
+    passo, testo = PROMPT[d["kind"]]
+    await state.set_state(passo)
+    await cb.message.edit_text(testo + HINT, reply_markup=kb.back())
+    await cb.answer("Rimanda le liste")
 
 
 @admin_router.callback_query(F.data.startswith("a:ok:"))
@@ -1375,7 +1494,6 @@ async def _show_admins(cb):
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmname:{nome}"),
         ])
     tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
-    totale = len(proprietari) + len(altri) + len(nomi)
     await cb.message.edit_text(
         f"👑 Proprietario: {len(proprietari)} · 🛡 Admin: {len(altri) + len(nomi)}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
