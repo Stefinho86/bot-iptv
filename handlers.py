@@ -5,6 +5,7 @@ import shutil
 import json
 import re
 import uuid
+from html import escape as _esc
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -74,7 +75,7 @@ def _ora(valore, fmt="%d/%m/%Y %H:%M"):
 
 def _num(data, idx):
     try:
-        return int(data.split(":")[idx])
+        return int((data or "").split(":")[idx])
     except Exception:
         return 0
 
@@ -121,14 +122,24 @@ def _utente(r):
     return f"@{r['username']}" if r["username"] else "no username"
 
 
+def _pulisci_user(nome):
+    """Riduce uno username a soli caratteri validi: se resta sporco Telegram
+    rifiuta l'intera tastiera, non solo quel pulsante."""
+    n = (nome or "").strip().lstrip("@").strip()
+    n = re.sub(r"[^0-9A-Za-z_]", "", n)
+    return n[:32]
+
+
 def _link(uid, username):
-    return f"https://t.me/{username}" if username else f"tg://user?id={uid}"
+    n = _pulisci_user(username)
+    return f"https://t.me/{n}" if n else f"tg://user?id={uid}"
 
 
 def _etichetta(r, stato=""):
     nome = _nome(r)[:9]
-    user = f"@{r['username'][:9]}" if r["username"] else "no username"
-    return f"{stato} {nome} {user} · {r['user_id']}"[:64]
+    user = _pulisci_user(r["username"])[:9]
+    user = f"@{user}" if user else "no username"
+    return f"{stato} {nome} {user} · {r['user_id']}"[:48]
 
 
 async def _edit(target, testo, kbd=None):
@@ -146,21 +157,61 @@ async def _edit(target, testo, kbd=None):
 
 
 async def _mostra(cb, testo, kbd=None):
+    """Modifica il messaggio; se Telegram rifiuta ne manda uno nuovo;
+    se fallisce anche quello avvisa con l'errore reale invece di sparire."""
+    errore = None
     try:
         await cb.message.edit_text(testo, reply_markup=kbd)
         return True
     except Exception as e:
+        errore = e
         if "not modified" in str(e).lower():
             return True
+    try:
+        await cb.message.answer(testo, reply_markup=kbd)
+        return True
+    except Exception as e:
+        errore = e
+    try:
+        await cb.answer(f"{type(errore).__name__}: {errore}"[:195], show_alert=True)
+    except Exception:
+        pass
+    return False
+
+
+async def _invia_o_modifica(msg, testo, kbd, edit=True):
+    """Ritorna None se ha mostrato la pagina, altrimenti l'eccezione."""
+    if edit:
         try:
-            await cb.message.answer(testo, reply_markup=kbd)
-            return True
-        except Exception as e2:
-            try:
-                await cb.answer(f"ERRORE {type(e2).__name__}: {e2}"[:195], show_alert=True)
-            except Exception:
-                pass
-            return False
+            await msg.edit_text(testo, reply_markup=kbd)
+            return None
+        except Exception as e:
+            if "not modified" in str(e).lower():
+                return None
+    try:
+        await msg.answer(testo, reply_markup=kbd)
+        return None
+    except Exception as e:
+        return e
+
+
+async def _esito(cb, errore):
+    if errore is None or cb is None:
+        return
+    try:
+        await cb.answer(f"Invio fallito: {type(errore).__name__}: {errore}"[:195], show_alert=True)
+    except Exception:
+        pass
+
+
+async def _avvisa(cb, e):
+    if cb is None:
+        print(f"PAGINA: {type(e).__name__}: {e}")
+        return
+    try:
+        await cb.answer(f"{type(e).__name__}: {e}"[:195], show_alert=True)
+    except Exception:
+        pass
 
 
 def _forwarded_uid(msg):
@@ -510,6 +561,8 @@ async def comandi_cmd(msg: Message, state: FSMContext):
         "/assegnazioni - storico consegne\n"
         "/revoca - ritira un'assegnazione\n"
         "/utenti - cerca un utente\n"
+        "/elenco - elenco utenti a pagine\n"
+        "/bannati - elenco utenti bannati\n"
         "/ban - blocca un utente\n"
         "/unban - sblocca un utente\n"
         "/reset - azzera l'attesa\n"
@@ -636,87 +689,143 @@ async def cb_noop(cb: CallbackQuery):
     await cb.answer()
 
 
+def _nav_pagine(prefisso, page, pagine):
+    return [
+        InlineKeyboardButton(text="◀️" if page > 0 else "·",
+                             callback_data=f"{prefisso}:{max(0, page - 1)}"),
+        InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"),
+        InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
+                             callback_data=f"{prefisso}:{min(pagine - 1, page + 1)}"),
+    ]
+
+
+def _coda_pagina():
+    return [
+        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")],
+        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+    ]
+
+
+async def _mostra_utenti(msg, page, edit=True, cb=None):
+    """Elenco utenti normali. Non fallisce mai in silenzio."""
+    try:
+        tot = int(await db.count_users(config.SUPER_ADMINS) or 0)
+        if not tot:
+            errore = await _invia_o_modifica(msg, "Nessun utente normale registrato.",
+                                             kb.nav("a:menu"), edit)
+            return await _esito(cb, errore)
+        pagine = max(1, (tot - 1) // PER_PAGE + 1)
+        page = max(0, min(int(page), pagine - 1))
+        righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
+        tastiera = []
+        for r in righe:
+            bannato = bool(r["banned"])
+            tastiera.append([
+                InlineKeyboardButton(text=_etichetta(r, "🚫" if bannato else "✅"),
+                                     url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
+                                     callback_data=f"lb:{'unban' if bannato else 'ban'}:"
+                                                   f"{r['user_id']}:{page}"),
+            ])
+        tastiera.append(_nav_pagine("pu", page, pagine))
+        tastiera += _coda_pagina()
+        testo = (f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
+                 f"Tocca il nome per aprire la chat.")
+        errore = await _invia_o_modifica(msg, testo,
+                                         InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
+        await _esito(cb, errore)
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+async def _mostra_bannati(msg, page, edit=True, cb=None):
+    try:
+        tot = int(await db.count_banned() or 0)
+        if not tot:
+            errore = await _invia_o_modifica(msg, "Nessun utente bannato.",
+                                             kb.nav("a:menu"), edit)
+            return await _esito(cb, errore)
+        pagine = max(1, (tot - 1) // PER_PAGE + 1)
+        page = max(0, min(int(page), pagine - 1))
+        righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
+        tastiera = []
+        for r in righe:
+            motivo = (r["ban_reason"] or "senza motivo")[:20]
+            tastiera.append([
+                InlineKeyboardButton(text=_etichetta(r, "🚫"), url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text="Sblocca",
+                                     callback_data=f"lb:unban:{r['user_id']}:{page}"),
+            ])
+            tastiera.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
+        tastiera.append(_nav_pagine("pb", page, pagine))
+        tastiera += _coda_pagina()
+        errore = await _invia_o_modifica(
+            msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
+            InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
+        await _esito(cb, errore)
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+@admin_router.callback_query(F.data == "a:allusers")
+async def cb_allusers(cb: CallbackQuery):
+    await cb.answer()
+    await _mostra_utenti(cb.message, 0, edit=True, cb=cb)
+
+
+@admin_router.callback_query(F.data.startswith("a:allusers:"))
+async def cb_allusers_p(cb: CallbackQuery):
+    await cb.answer()
+    await _mostra_utenti(cb.message, _num(cb.data, 2), edit=True, cb=cb)
+
+
 @admin_router.callback_query(F.data.startswith("pu:"))
 async def pg_users(cb: CallbackQuery):
-    page = _num(cb.data, 1)
-    await cb.answer(f"Pagina {page + 1}")
-    await _show_users_page(cb, page)
+    await cb.answer()
+    await _mostra_utenti(cb.message, _num(cb.data, 1), edit=True, cb=cb)
 
 
 @admin_router.callback_query(F.data.startswith("pb:"))
 async def pg_banned(cb: CallbackQuery):
-    page = _num(cb.data, 1)
-    await cb.answer(f"Pagina {page + 1}")
-    await _show_banned_page(cb, page)
-
-
-def _nav_pagine(cb_prefisso, page, pagine):
-    return [
-        InlineKeyboardButton(text="◀️" if page > 0 else "·",
-                             callback_data=f"{cb_prefisso}:{max(0, page - 1)}"),
-        InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"),
-        InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
-                             callback_data=f"{cb_prefisso}:{min(pagine - 1, page + 1)}"),
-    ]
-
-
-async def _show_users_page(cb, page):
-    tot = await db.count_users(config.SUPER_ADMINS)
-    if not tot:
-        return await _mostra(cb, "Nessun utente normale registrato.", kb.nav("a:menu"))
-    pagine = max(1, (tot - 1) // PER_PAGE + 1)
-    page = max(0, min(page, pagine - 1))
-    righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
-    tastiera = []
-    for r in righe:
-        link = _link(r["user_id"], r["username"])
-        tastiera.append([
-            InlineKeyboardButton(text=_etichetta(r, "🚫" if r["banned"] else "✅"), url=link),
-            InlineKeyboardButton(
-                text=("Sblocca" if r["banned"] else "Banna"),
-                callback_data=f"lb:{'unban' if r['banned'] else 'ban'}:{r['user_id']}:{page}"),
-        ])
-    tastiera.append(_nav_pagine("pu", page, pagine))
-    tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
-    tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    await _mostra(cb,
-                  f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
-                  f"Tocca nome o @utente per aprire la chat.",
-                  InlineKeyboardMarkup(inline_keyboard=tastiera))
-
-
-@admin_router.callback_query(F.data.startswith("a:allusers"))
-async def cb_allusers(cb: CallbackQuery):
     await cb.answer()
-    await _show_users_page(cb, _num(cb.data, 2))
+    await _mostra_bannati(cb.message, _num(cb.data, 1), edit=True, cb=cb)
 
 
-async def _show_banned_page(cb, page):
-    tot = await db.count_banned()
-    if not tot:
-        return await _mostra(cb, "Nessun utente bannato.", kb.nav("a:menu"))
-    pagine = max(1, (tot - 1) // PER_PAGE + 1)
-    page = max(0, min(page, pagine - 1))
-    righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
-    tastiera = []
-    for r in righe:
-        link = _link(r["user_id"], r["username"])
-        tastiera.append([
-            InlineKeyboardButton(text=_etichetta(r, "🚫"), url=link),
-            InlineKeyboardButton(text="Sblocca",
-                                 callback_data=f"lb:unban:{r['user_id']}:{page}"),
-        ])
-    tastiera.append(_nav_pagine("pb", page, pagine))
-    tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
-    tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    await _mostra(cb, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
-                  InlineKeyboardMarkup(inline_keyboard=tastiera))
-
-
-@admin_router.callback_query(F.data.startswith("a:banned"))
+@admin_router.callback_query(F.data == "a:banned")
 async def cb_banned(cb: CallbackQuery):
     await cb.answer()
-    await _show_banned_page(cb, _num(cb.data, 2))
+    await _mostra_bannati(cb.message, 0, edit=True, cb=cb)
+
+
+@admin_router.callback_query(F.data.startswith("lb:"))
+async def cb_lista_ban(cb: CallbackQuery):
+    pezzi = (cb.data or "").split(":")
+    if len(pezzi) < 4:
+        return await cb.answer("Pulsante non valido", show_alert=True)
+    azione, uid, page = pezzi[1], int(pezzi[2]), int(pezzi[3])
+    await db.ensure_user(uid)
+    if azione == "unban":
+        await db.unban(uid)
+        await cb.answer("Sbloccato")
+    else:
+        await db.ban(uid, "deciso da admin")
+        await db.log(cb.from_user.id, "ban", str(uid))
+        await cb.answer("Bannato")
+    await _mostra_utenti(cb.message, page, edit=True, cb=cb)
+
+
+@admin_router.message(Command("elenco"))
+async def elenco_cmd(msg: Message, state: FSMContext):
+    await state.clear()
+    p = msg.text.split(maxsplit=1)
+    pagina = int(p[1]) - 1 if len(p) > 1 and p[1].strip().isdigit() else 0
+    await _mostra_utenti(msg, max(0, pagina), edit=False)
+
+
+@admin_router.message(Command("bannati"))
+async def bannati_cmd(msg: Message, state: FSMContext):
+    await state.clear()
+    await _mostra_bannati(msg, 0, edit=False)
 
 
 # ==================== LOG ATTIVITA ====================
@@ -1534,7 +1643,7 @@ async def _show_users(msg, q):
         return await msg.answer("Nessun utente trovato.", reply_markup=kb.nav("a:menu"))
     for r in rows:
         await msg.answer(
-            f"<b>{_nome(r)}</b>\n{_utente(r)}\nID: <code>{r['user_id']}</code>\n"
+            f"<b>{_esc(_nome(r))}</b>\n{_esc(_utente(r))}\nID: <code>{r['user_id']}</code>\n"
             f"bannato: {'si' if r['banned'] else 'no'} - prossima: "
             f"{_ora(r['next_available']) if r['next_available'] else '-'}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1689,14 +1798,14 @@ async def _show_admins(cb):
             InlineKeyboardButton(text="proprietario", callback_data="a:noop"),
         ])
     for r in altri:
-        nome = (r["username"] or "no username")[:9]
+        nome = (_pulisci_user(r["username"]) or "no username")[:9]
         tastiera.append([
             InlineKeyboardButton(text=f"🛡 {nome} · {r['user_id']}",
                                  url=_link(r["user_id"], r["username"])),
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmadmin:{r['user_id']}"),
         ])
     for r in nomi:
-        nome = r["username"][:18]
+        nome = _pulisci_user(r["username"])[:18]
         tastiera.append([
             InlineKeyboardButton(text=f"🛡 @{nome}", url=f"https://t.me/{nome}"),
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmname:{nome}"),
