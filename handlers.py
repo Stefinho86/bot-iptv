@@ -22,6 +22,8 @@ import utils as kb
 from services import detect, detect_many, ocr_bytes, preview, test_list
 from utils import IsAdmin, Trigger, NotCommand, AnonUnverified
 
+page_router = Router()
+
 admin_router = Router()
 admin_router.message.filter(IsAdmin())
 admin_router.callback_query.filter(IsAdmin())
@@ -42,6 +44,7 @@ MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 HINT = "\n\nScrivi /annulla per interrompere."
 
 MAX_ANTEPRIMA = 15
+PER_PAGE = 10
 
 
 class Add(StatesGroup):
@@ -123,8 +126,8 @@ def _utente(r):
 
 
 def _pulisci_user(nome):
-    """Riduce uno username a soli caratteri validi: se resta sporco Telegram
-    rifiuta l'intera tastiera, non solo quel pulsante."""
+    """Solo caratteri validi: se un URL resta sporco Telegram rifiuta
+    l'intera tastiera, non solo quel pulsante."""
     n = (nome or "").strip().lstrip("@").strip()
     n = re.sub(r"[^0-9A-Za-z_]", "", n)
     return n[:32]
@@ -158,7 +161,7 @@ async def _edit(target, testo, kbd=None):
 
 async def _mostra(cb, testo, kbd=None):
     """Modifica il messaggio; se Telegram rifiuta ne manda uno nuovo;
-    se fallisce anche quello avvisa con l'errore reale invece di sparire."""
+    se fallisce anche quello avvisa con l'errore reale."""
     errore = None
     try:
         await cb.message.edit_text(testo, reply_markup=kbd)
@@ -180,7 +183,7 @@ async def _mostra(cb, testo, kbd=None):
 
 
 async def _invia_o_modifica(msg, testo, kbd, edit=True):
-    """Ritorna None se ha mostrato la pagina, altrimenti l'eccezione."""
+    """None se la pagina è stata mostrata, altrimenti l'eccezione."""
     if edit:
         try:
             await msg.edit_text(testo, reply_markup=kbd)
@@ -205,8 +208,8 @@ async def _esito(cb, errore):
 
 
 async def _avvisa(cb, e):
+    print(f"PAGINA: {type(e).__name__}: {e}")
     if cb is None:
-        print(f"PAGINA: {type(e).__name__}: {e}")
         return
     try:
         await cb.answer(f"{type(e).__name__}: {e}"[:195], show_alert=True)
@@ -350,6 +353,163 @@ def _pulisci(uid):
     for cid, d in list(BULK.items()):
         if d.get("uid") == uid:
             BULK.pop(cid, None)
+
+
+# ==================== PAGINE (router senza filtro) ====================
+async def _sono_admin(cb):
+    try:
+        if await kb.is_admin_cb(cb):
+            return True
+    except Exception as e:
+        await _avvisa(cb, e)
+        return True
+    try:
+        await cb.answer("Non sei amministratore", show_alert=True)
+    except Exception:
+        pass
+    return False
+
+
+async def _rispondi(cb):
+    try:
+        await cb.answer()
+    except Exception as e:
+        print(f"answer: {type(e).__name__}: {e}")
+
+
+def _nav_pagine(prefisso, page, pagine):
+    return [
+        InlineKeyboardButton(text="◀️" if page > 0 else "·",
+                             callback_data=f"{prefisso}:{max(0, page - 1)}"),
+        InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"),
+        InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
+                             callback_data=f"{prefisso}:{min(pagine - 1, page + 1)}"),
+    ]
+
+
+def _coda_pagina():
+    return [
+        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")],
+        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+    ]
+
+
+async def _mostra_utenti(msg, page, edit=True, cb=None):
+    try:
+        if msg is None:
+            return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
+        tot = int(await db.count_users(config.SUPER_ADMINS) or 0)
+        if not tot:
+            errore = await _invia_o_modifica(msg, "Nessun utente normale registrato.",
+                                             kb.nav("a:menu"), edit)
+            return await _esito(cb, errore)
+        pagine = max(1, (tot - 1) // PER_PAGE + 1)
+        page = max(0, min(int(page), pagine - 1))
+        righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
+        tastiera = []
+        for r in righe:
+            bannato = bool(r["banned"])
+            tastiera.append([
+                InlineKeyboardButton(text=_etichetta(r, "🚫" if bannato else "✅"),
+                                     url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
+                                     callback_data=f"lb:{'unban' if bannato else 'ban'}:"
+                                                   f"{r['user_id']}:{page}"),
+            ])
+        tastiera.append(_nav_pagine("lu", page, pagine))
+        tastiera += _coda_pagina()
+        testo = (f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
+                 f"Tocca il nome per aprire la chat.")
+        errore = await _invia_o_modifica(msg, testo,
+                                         InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
+        await _esito(cb, errore)
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+async def _mostra_bannati(msg, page, edit=True, cb=None):
+    try:
+        if msg is None:
+            return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
+        tot = int(await db.count_banned() or 0)
+        if not tot:
+            errore = await _invia_o_modifica(msg, "Nessun utente bannato.",
+                                             kb.nav("a:menu"), edit)
+            return await _esito(cb, errore)
+        pagine = max(1, (tot - 1) // PER_PAGE + 1)
+        page = max(0, min(int(page), pagine - 1))
+        righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
+        tastiera = []
+        for r in righe:
+            motivo = (r["ban_reason"] or "senza motivo")[:20]
+            tastiera.append([
+                InlineKeyboardButton(text=_etichetta(r, "🚫"), url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text="Sblocca",
+                                     callback_data=f"lb:unban:{r['user_id']}:{page}"),
+            ])
+            tastiera.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
+        tastiera.append(_nav_pagine("lp", page, pagine))
+        tastiera += _coda_pagina()
+        errore = await _invia_o_modifica(
+            msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
+            InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
+        await _esito(cb, errore)
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+@page_router.callback_query(F.data == "a:noop")
+async def cb_noop(cb: CallbackQuery):
+    await _rispondi(cb)
+
+
+@page_router.callback_query(F.data.in_({"a:allusers", "lu:0"}))
+async def cb_utenti_apri(cb: CallbackQuery):
+    await _rispondi(cb)
+    if not await _sono_admin(cb):
+        return
+    await _mostra_utenti(cb.message, 0, edit=True, cb=cb)
+
+
+@page_router.callback_query(F.data.in_({"a:banned", "lp:0"}))
+async def cb_bannati_apri(cb: CallbackQuery):
+    await _rispondi(cb)
+    if not await _sono_admin(cb):
+        return
+    await _mostra_bannati(cb.message, 0, edit=True, cb=cb)
+
+
+@page_router.callback_query(F.data.startswith("lu:"))
+async def cb_utenti_pagina(cb: CallbackQuery):
+    await _rispondi(cb)
+    if not await _sono_admin(cb):
+        return
+    await _mostra_utenti(cb.message, _num(cb.data, 1), edit=True, cb=cb)
+
+
+@page_router.callback_query(F.data.startswith("lp:"))
+async def cb_bannati_pagina(cb: CallbackQuery):
+    await _rispondi(cb)
+    if not await _sono_admin(cb):
+        return
+    await _mostra_bannati(cb.message, _num(cb.data, 1), edit=True, cb=cb)
+
+
+@page_router.callback_query(F.data.startswith("lb:"))
+async def cb_lista_ban(cb: CallbackQuery):
+    pezzi = (cb.data or "").split(":")
+    if len(pezzi) < 4:
+        return await cb.answer("Pulsante non valido", show_alert=True)
+    azione, uid, page = pezzi[1], int(pezzi[2]), int(pezzi[3])
+    await db.ensure_user(uid)
+    if azione == "unban":
+        await db.unban(uid)
+        await cb.answer("Sbloccato")
+    else:
+        await db.ban(uid, "deciso da admin")
+        await db.log(cb.from_user.id, "ban", str(uid))
+        await cb.answer("Bannato")
+    await _mostra_utenti(cb.message, page, edit=True, cb=cb)
 
 
 # ==================== VERIFICA ANONIMI ====================
@@ -680,140 +840,7 @@ async def cb_toggle(cb: CallbackQuery):
     await _edit(cb.message, f"Bot {'SPENTO' if cur else 'ATTIVO'}.", kb.admin_menu())
 
 
-# ==================== PAGINE ====================
-PER_PAGE = 10
-
-
-@admin_router.callback_query(F.data == "a:noop")
-async def cb_noop(cb: CallbackQuery):
-    await cb.answer()
-
-
-def _nav_pagine(prefisso, page, pagine):
-    return [
-        InlineKeyboardButton(text="◀️" if page > 0 else "·",
-                             callback_data=f"{prefisso}:{max(0, page - 1)}"),
-        InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"),
-        InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
-                             callback_data=f"{prefisso}:{min(pagine - 1, page + 1)}"),
-    ]
-
-
-def _coda_pagina():
-    return [
-        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")],
-        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
-    ]
-
-
-async def _mostra_utenti(msg, page, edit=True, cb=None):
-    """Elenco utenti normali. Non fallisce mai in silenzio."""
-    try:
-        tot = int(await db.count_users(config.SUPER_ADMINS) or 0)
-        if not tot:
-            errore = await _invia_o_modifica(msg, "Nessun utente normale registrato.",
-                                             kb.nav("a:menu"), edit)
-            return await _esito(cb, errore)
-        pagine = max(1, (tot - 1) // PER_PAGE + 1)
-        page = max(0, min(int(page), pagine - 1))
-        righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
-        tastiera = []
-        for r in righe:
-            bannato = bool(r["banned"])
-            tastiera.append([
-                InlineKeyboardButton(text=_etichetta(r, "🚫" if bannato else "✅"),
-                                     url=_link(r["user_id"], r["username"])),
-                InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
-                                     callback_data=f"lb:{'unban' if bannato else 'ban'}:"
-                                                   f"{r['user_id']}:{page}"),
-            ])
-        tastiera.append(_nav_pagine("pu", page, pagine))
-        tastiera += _coda_pagina()
-        testo = (f"👤 Utenti normali: {tot} — pagina {page + 1}/{pagine}\n"
-                 f"Tocca il nome per aprire la chat.")
-        errore = await _invia_o_modifica(msg, testo,
-                                         InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
-        await _esito(cb, errore)
-    except Exception as e:
-        await _avvisa(cb, e)
-
-
-async def _mostra_bannati(msg, page, edit=True, cb=None):
-    try:
-        tot = int(await db.count_banned() or 0)
-        if not tot:
-            errore = await _invia_o_modifica(msg, "Nessun utente bannato.",
-                                             kb.nav("a:menu"), edit)
-            return await _esito(cb, errore)
-        pagine = max(1, (tot - 1) // PER_PAGE + 1)
-        page = max(0, min(int(page), pagine - 1))
-        righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
-        tastiera = []
-        for r in righe:
-            motivo = (r["ban_reason"] or "senza motivo")[:20]
-            tastiera.append([
-                InlineKeyboardButton(text=_etichetta(r, "🚫"), url=_link(r["user_id"], r["username"])),
-                InlineKeyboardButton(text="Sblocca",
-                                     callback_data=f"lb:unban:{r['user_id']}:{page}"),
-            ])
-            tastiera.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
-        tastiera.append(_nav_pagine("pb", page, pagine))
-        tastiera += _coda_pagina()
-        errore = await _invia_o_modifica(
-            msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1}/{pagine}",
-            InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
-        await _esito(cb, errore)
-    except Exception as e:
-        await _avvisa(cb, e)
-
-
-@admin_router.callback_query(F.data == "a:allusers")
-async def cb_allusers(cb: CallbackQuery):
-    await cb.answer()
-    await _mostra_utenti(cb.message, 0, edit=True, cb=cb)
-
-
-@admin_router.callback_query(F.data.startswith("a:allusers:"))
-async def cb_allusers_p(cb: CallbackQuery):
-    await cb.answer()
-    await _mostra_utenti(cb.message, _num(cb.data, 2), edit=True, cb=cb)
-
-
-@admin_router.callback_query(F.data.startswith("pu:"))
-async def pg_users(cb: CallbackQuery):
-    await cb.answer()
-    await _mostra_utenti(cb.message, _num(cb.data, 1), edit=True, cb=cb)
-
-
-@admin_router.callback_query(F.data.startswith("pb:"))
-async def pg_banned(cb: CallbackQuery):
-    await cb.answer()
-    await _mostra_bannati(cb.message, _num(cb.data, 1), edit=True, cb=cb)
-
-
-@admin_router.callback_query(F.data == "a:banned")
-async def cb_banned(cb: CallbackQuery):
-    await cb.answer()
-    await _mostra_bannati(cb.message, 0, edit=True, cb=cb)
-
-
-@admin_router.callback_query(F.data.startswith("lb:"))
-async def cb_lista_ban(cb: CallbackQuery):
-    pezzi = (cb.data or "").split(":")
-    if len(pezzi) < 4:
-        return await cb.answer("Pulsante non valido", show_alert=True)
-    azione, uid, page = pezzi[1], int(pezzi[2]), int(pezzi[3])
-    await db.ensure_user(uid)
-    if azione == "unban":
-        await db.unban(uid)
-        await cb.answer("Sbloccato")
-    else:
-        await db.ban(uid, "deciso da admin")
-        await db.log(cb.from_user.id, "ban", str(uid))
-        await cb.answer("Bannato")
-    await _mostra_utenti(cb.message, page, edit=True, cb=cb)
-
-
+# ==================== COMANDI ELENCO ====================
 @admin_router.message(Command("elenco"))
 async def elenco_cmd(msg: Message, state: FSMContext):
     await state.clear()
