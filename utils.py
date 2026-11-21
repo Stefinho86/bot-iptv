@@ -35,10 +35,14 @@ def _event_parts(event):
 
 
 async def anon_is_admin(chat_id) -> bool:
-    uid = await db.get_anon_verified(chat_id)
-    if not uid:
+    try:
+        uid = await db.get_anon_verified(chat_id)
+        if not uid:
+            return False
+        return await db.is_admin(uid)
+    except Exception as e:
+        print(f"anon_is_admin: {type(e).__name__}: {e}")
         return False
-    return await db.is_admin(uid)
 
 
 class IsAdmin(BaseFilter):
@@ -59,13 +63,16 @@ class IsAdmin(BaseFilter):
 
 class AnonUnverified(BaseFilter):
     async def __call__(self, event) -> bool:
-        user, sc, chat = _event_parts(event)
-        if not user or user.id != ANON_ID or not sc:
+        try:
+            user, sc, chat = _event_parts(event)
+            if not user or user.id != ANON_ID or not sc:
+                return False
+            gid = await db.get_group_id()
+            if gid and sc.id != gid:
+                return False
+            return not await anon_is_admin(sc.id)
+        except Exception:
             return False
-        gid = await db.get_group_id()
-        if gid and sc.id != gid:
-            return False
-        return not await anon_is_admin(sc.id)
 
 
 async def is_admin_event(event) -> bool:
@@ -73,11 +80,15 @@ async def is_admin_event(event) -> bool:
 
 
 async def is_admin_cb(cb) -> bool:
-    if cb.from_user.id == ANON_ID:
-        if not cb.message:
-            return False
-        return await anon_is_admin(cb.message.chat.id)
-    return await db.is_admin(cb.from_user.id, cb.from_user.username)
+    try:
+        if cb.from_user.id == ANON_ID:
+            if not cb.message:
+                return False
+            return await anon_is_admin(cb.message.chat.id)
+        return await db.is_admin(cb.from_user.id, cb.from_user.username)
+    except Exception as e:
+        print(f"is_admin_cb: {type(e).__name__}: {e}")
+        return False
 
 
 class Trigger(BaseFilter):
@@ -124,8 +135,8 @@ def admin_menu():
         [B(text="➕ Aggiungi lista", callback_data="a:add")],
         [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist")],
         [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
-        [B(text="📇 Elenco utenti", callback_data="a:allusers"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
-        [B(text="🚫 Utenti bannati", callback_data="a:banned")],
+        [B(text="📇 Elenco utenti", callback_data="lu:0"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
+        [B(text="🚫 Utenti bannati", callback_data="lp:0")],
         [B(text="➕ Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="🔁 Reset attesa", callback_data="a:reset"), B(text="⏳ Cooldown", callback_data="s:cool")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
