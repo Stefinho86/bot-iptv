@@ -140,6 +140,13 @@ def confirm(cid):
     ])
 
 
+def doppione(cid):
+    return K(inline_keyboard=[
+        [B(text="✅ AGGIUNGI COMUNQUE", callback_data=f"a:ok:{cid}")],
+        [B(text="❌ Annulla", callback_data="a:cancel")],
+    ])
+
+
 def force(cid):
     return K(inline_keyboard=[
         [B(text="✅ INSERISCI UGUALMENTE", callback_data=f"a:force:{cid}")],
