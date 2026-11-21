@@ -84,22 +84,6 @@ def _quadro(s):
             f"🚫 Bannati: {s['banned']}")
 
 
-async def _torna_menu(target, testo, edit=True):
-    kbd = kb.admin_menu()
-    try:
-        if edit and isinstance(target, Message):
-            await target.edit_text(testo, reply_markup=kbd)
-        elif isinstance(target, Message):
-            await target.answer(testo, reply_markup=kbd)
-        else:
-            await target.answer(testo, reply_markup=kbd)
-    except Exception:
-        try:
-            await target.answer(testo, reply_markup=kbd)
-        except Exception:
-            pass
-
-
 def _payload_text(kind, p):
     if kind == "xtream":
         return (f"Server: <code>{p['server']}</code>\nUtente: <code>{p['username']}</code>\n"
@@ -109,6 +93,14 @@ def _payload_text(kind, p):
     if kind == "stalker":
         return f"Portal: <code>{p['portal']}</code>\nMAC: <code>{p['mac']}</code>"
     return f"<code>{p['url']}</code>"
+
+
+def _nome(r):
+    return (r["full_name"] or "").strip() or "(senza nome)"
+
+
+def _utente(r):
+    return f"@{r['username']}" if r["username"] else "no username"
 
 
 def _forwarded_uid(msg):
@@ -158,7 +150,8 @@ async def _target(msg, raw=None):
 async def _need_target(msg):
     await msg.answer("Non riesco a risolvere quel nome. Telegram permette di cercare uno "
                      "@username solo se il bot quella persona l'ha già incontrata.\n\n"
-                     "Inoltra qui un suo messaggio, oppure mandami il suo ID numerico." + HINT)
+                     "Inoltra qui un suo messaggio, oppure mandami il suo ID numerico." + HINT,
+                     reply_markup=kb.nav("a:menu"))
 
 
 async def _stato_text(msg, bot):
@@ -440,7 +433,7 @@ async def stato_cmd(msg: Message, bot: Bot, state: FSMContext):
 
 @admin_router.callback_query(F.data == "a:stato")
 async def cb_stato(cb: CallbackQuery, bot: Bot):
-    await cb.message.answer(await _stato_text(cb.message, bot), reply_markup=kb.admin_menu())
+    await cb.message.edit_text(await _stato_text(cb.message, bot), reply_markup=kb.admin_menu())
     await cb.answer()
 
 
@@ -523,7 +516,8 @@ async def cb_reload(cb: CallbackQuery, bot: Bot):
 async def cb_users(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="utenti")
-    await cb.message.edit_text("Chi vuoi cercare? Mandami ID o @username." + HINT)
+    await cb.message.edit_text("Chi vuoi cercare? Mandami ID o @username." + HINT,
+                               reply_markup=kb.nav("a:menu"))
     await cb.answer()
 
 
@@ -532,7 +526,8 @@ async def cb_revoca(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
     await cb.message.edit_text("Quale assegnazione vuoi revocare? Mandami il numero "
-                            "(lo trovi in Assegnazioni)." + HINT)
+                               "(lo trovi in Assegnazioni)." + HINT,
+                               reply_markup=kb.nav("a:hist"))
     await cb.answer()
 
 
@@ -541,7 +536,8 @@ async def cb_reset(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="reset")
     await cb.message.edit_text("A chi vuoi azzerare l'attesa? Mandami ID, @username "
-                               "o inoltra un suo messaggio." + HINT)
+                               "o inoltra un suo messaggio." + HINT,
+                               reply_markup=kb.nav("a:menu"))
     await cb.answer()
 
 
@@ -551,7 +547,8 @@ async def cb_admin_add(cb: CallbackQuery, state: FSMContext):
     await state.update_data(action="admin_add")
     await cb.message.edit_text("Chi vuoi aggiungere come amministratore?\n\n"
                                "Mandami lo @username: funziona anche se non ha mai scritto al bot.\n"
-                               "In alternativa l'ID numerico o un messaggio inoltrato." + HINT)
+                               "In alternativa l'ID numerico o un messaggio inoltrato." + HINT,
+                               reply_markup=kb.nav("a:menu"))
     await cb.answer()
 
 
@@ -560,7 +557,8 @@ async def cb_admin_del(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="admin_del")
     await cb.message.edit_text("Chi vuoi rimuovere dagli amministratori? Mandami ID, @username "
-                            "o inoltra un suo messaggio." + HINT)
+                               "o inoltra un suo messaggio." + HINT,
+                               reply_markup=kb.nav("a:menu"))
     await cb.answer()
 
 
@@ -658,10 +656,51 @@ async def add_cancel(cb: CallbackQuery, state: FSMContext):
     _pulisci(cb.from_user.id)
     await state.clear()
     try:
-        await cb.message.edit_text(_quadro(await db.stats()),
-                                   reply_markup=kb.admin_menu())
+        await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.admin_menu())
     except Exception:
         await cb.message.answer("Annullato.", reply_markup=kb.admin_menu())
+
+
+@admin_router.callback_query(F.data.startswith("a:b:"))
+async def cb_back(cb: CallbackQuery, state: FSMContext):
+    dest = cb.data.split(":", 2)[2]
+    await cb.answer("Indietro")
+    if dest == "menu":
+        _pulisci(cb.from_user.id)
+        await state.clear()
+        return await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.admin_menu())
+    if dest == "kinds":
+        _pulisci(cb.from_user.id)
+        await state.clear()
+        return await cb.message.edit_text("Che tipo di lista vuoi inserire?", reply_markup=kb.kinds())
+    if dest == "set":
+        await state.clear()
+        return await cb.message.edit_text("Impostazioni", reply_markup=await _settings_kb())
+    if dest == "hist":
+        await state.clear()
+        return await _hist(cb.message, edit=True)
+    if dest == "xserver":
+        await state.set_state(Add.x_server)
+        testo = ("Mandami indirizzo e porta del pannello.\n\n"
+                 "Esempio: <code>http://host:8080</code>")
+        return await cb.message.edit_text(testo + HINT, reply_markup=kb.nav("a:add"))
+    if dest == "xuser":
+        await state.set_state(Add.x_user)
+        return await cb.message.edit_text("Ora l'utente." + HINT, reply_markup=kb.nav("a:b:xserver"))
+    if dest == "sportal":
+        await state.set_state(Add.s_portal)
+        testo = ("Mandami indirizzo e porta del portale.\n\n"
+                 "Esempio: <code>http://host:8080/c/</code>")
+        return await cb.message.edit_text(testo + HINT, reply_markup=kb.nav("a:add"))
+    if dest in PROMPT:
+        _pulisci(cb.from_user.id)
+        passo, testo = PROMPT[dest]
+        await state.update_data(kind=dest)
+        await state.set_state(passo)
+        return await cb.message.edit_text(testo + HINT, reply_markup=kb.nav("a:add"))
+    _pulisci(cb.from_user.id)
+    await state.clear()
+    await cb.message.edit_text("Che tipo di lista vuoi inserire?", reply_markup=kb.kinds())
 
 
 @admin_router.callback_query(F.data.startswith("a:k:"))
@@ -675,7 +714,7 @@ async def cb_kind(cb: CallbackQuery, state: FSMContext):
             "Mandami il <b>file .txt</b>, uno <b>screenshot</b> con le liste nella didascalia, "
             "oppure incolla il testo.\n"
             "Riconosco Xtream, M3U e Stalker, scarto le copie e ti mostro cosa ho trovato "
-            "prima di salvare." + HINT, reply_markup=kb.back())
+            "prima di salvare." + HINT, reply_markup=kb.nav("a:add"))
         return await cb.answer()
     if kind not in PROMPT:
         await cb.message.edit_text("Che tipo di lista vuoi inserire?", reply_markup=kb.kinds())
@@ -684,7 +723,7 @@ async def cb_kind(cb: CallbackQuery, state: FSMContext):
     await state.update_data(kind=kind)
     passo, testo = PROMPT[kind]
     await state.set_state(passo)
-    await cb.message.edit_text(testo + HINT, reply_markup=kb.back())
+    await cb.message.edit_text(testo + HINT, reply_markup=kb.nav("a:add"))
     await cb.answer()
 
 
@@ -694,6 +733,7 @@ async def _ask_confirm(target, state: FSMContext, item):
     TMP[cid] = item
     await state.update_data(kind=item["kind"])
     await state.set_state(Add.confirm)
+    indietro = f"a:b:{item['kind']}"
     dup = await db.lista_simile(item["kind"], item["payload"])
     if dup:
         vecchio = {"kind": dup["kind"], "payload": json.loads(dup["payload"])}
@@ -703,10 +743,10 @@ async def _ask_confirm(target, state: FSMContext, item):
                 f"{preview(vecchio)}\n\n"
                 f"──────────\n\n<b>Stai inserendo:</b>\n{preview(item)}\n\n"
                 f"La aggiungo lo stesso?")
-        kbd = kb.doppione(cid)
+        kbd = kb.doppione(cid, indietro)
     else:
         text = f"Confermi questo inserimento?\n\n{preview(item)}"
-        kbd = kb.confirm(cid)
+        kbd = kb.confirm(cid, indietro)
     if isinstance(target, CallbackQuery):
         await target.message.edit_text(text, reply_markup=kbd)
         await target.answer()
@@ -725,10 +765,10 @@ async def _mostra_multiplo(target, state: FSMContext, kind, items):
     testo = (f"Ho riconosciuto <b>{len(items)}</b> liste separate:\n\n{righe}{extra}\n\n"
              f"Sono corrette? Se confermi le salvo tutte, altrimenti rimandamele.")
     if isinstance(target, CallbackQuery):
-        await target.message.edit_text(testo, reply_markup=kb.multiplo(cid))
+        await target.message.edit_text(testo, reply_markup=kb.multiplo(cid, f"a:b:{kind}"))
         await target.answer()
     else:
-        await target.answer(testo, reply_markup=kb.multiplo(cid))
+        await target.answer(testo, reply_markup=kb.multiplo(cid, f"a:b:{kind}"))
 
 
 @admin_router.message(Add.m3u, F.text)
@@ -738,7 +778,8 @@ async def add_m3u(msg: Message, state: FSMContext):
         return await _mostra_multiplo(msg, state, "m3u", fatte)
     if len(fatte) == 1:
         return await _ask_confirm(msg, state, fatte[0])
-    await msg.answer("Serve un link che inizi con http. Riprova o /annulla.")
+    await msg.answer("Serve un link che inizi con http. Riprova o /annulla.",
+                     reply_markup=kb.nav("a:add"))
 
 
 @admin_router.message(Add.x_server, F.text)
@@ -753,27 +794,30 @@ async def add_x_server(msg: Message, state: FSMContext):
     if not s.startswith("http"):
         s = "http://" + s
     if not re.match(r"^https?://[^\s/]+", s):
-        return await msg.answer("Indirizzo non valido. Esempio: http://host:8080")
+        return await msg.answer("Indirizzo non valido. Esempio: http://host:8080",
+                                reply_markup=kb.nav("a:add"))
     await state.update_data(server=s.rstrip("/"))
     await state.set_state(Add.x_user)
-    await msg.answer("Ora l'utente.")
+    await msg.answer("Ora l'utente.", reply_markup=kb.nav("a:b:xserver"))
 
 
 @admin_router.message(Add.x_user, F.text)
 async def add_x_user(msg: Message, state: FSMContext):
     u = (msg.text or "").strip()
     if not u or " " in u:
-        return await msg.answer("Utente non valido: niente spazi.")
+        return await msg.answer("Utente non valido: niente spazi.",
+                                reply_markup=kb.nav("a:b:xserver"))
     await state.update_data(username=u)
     await state.set_state(Add.x_pass)
-    await msg.answer("Ora la password.")
+    await msg.answer("Ora la password.", reply_markup=kb.nav("a:b:xuser"))
 
 
 @admin_router.message(Add.x_pass, F.text)
 async def add_x_pass(msg: Message, state: FSMContext):
     p = (msg.text or "").strip()
     if not p or " " in p:
-        return await msg.answer("Password non valida: niente spazi.")
+        return await msg.answer("Password non valida: niente spazi.",
+                                reply_markup=kb.nav("a:b:xuser"))
     d = await state.get_data()
     item = {"kind": "xtream", "label": d["server"],
             "payload": {"server": d["server"], "username": d["username"], "password": p}}
@@ -792,17 +836,20 @@ async def add_s_portal(msg: Message, state: FSMContext):
     if not s.startswith("http"):
         s = "http://" + s
     if not re.match(r"^https?://[^\s/]+", s):
-        return await msg.answer("Indirizzo non valido. Esempio: http://host:8080/c/")
+        return await msg.answer("Indirizzo non valido. Esempio: http://host:8080/c/",
+                                reply_markup=kb.nav("a:add"))
     await state.update_data(portal=s.rstrip("/"))
     await state.set_state(Add.s_mac)
-    await msg.answer("Ora il MAC address.\n\nEsempio: <code>00:1A:79:12:34:56</code>")
+    await msg.answer("Ora il MAC address.\n\nEsempio: <code>00:1A:79:12:34:56</code>",
+                     reply_markup=kb.nav("a:b:sportal"))
 
 
 @admin_router.message(Add.s_mac, F.text)
 async def add_s_mac(msg: Message, state: FSMContext):
     m = (msg.text or "").strip().upper().replace("-", ":")
     if not MAC_RE.match(m):
-        return await msg.answer("MAC non valido. Formato: 00:1A:79:12:34:56")
+        return await msg.answer("MAC non valido. Formato: 00:1A:79:12:34:56",
+                                reply_markup=kb.nav("a:b:sportal"))
     d = await state.get_data()
     item = {"kind": "stalker", "label": d["portal"],
             "payload": {"portal": d["portal"], "mac": m}}
@@ -814,7 +861,7 @@ async def add_s_mac(msg: Message, state: FSMContext):
 async def add_foto_reject(msg: Message):
     await msg.answer("Qui accetto solo testo o copia-incolla.\n"
                      "Per una foto o un file usa /aggiungi e scegli «Aggiungi foto/txt».",
-                     reply_markup=kb.back())
+                     reply_markup=kb.nav("a:add"))
 
 
 @admin_router.message(Add.confirm, F.text)
@@ -830,7 +877,8 @@ async def confirm_text(msg: Message, state: FSMContext):
     else:
         fatte = _parse_m3u(testo) + _parse_xtream(testo) + _parse_stalker(testo)
     if not fatte:
-        return await msg.answer("Non ho riconosciuto liste. Rimandamele oppure /annulla.")
+        return await msg.answer("Non ho riconosciuto liste. Rimandamele oppure /annulla.",
+                                reply_markup=kb.nav("a:add"))
     if len(fatte) == 1:
         return await _ask_confirm(msg, state, fatte[0])
     await _mostra_multiplo(msg, state, kind or fatte[0]["kind"], fatte)
@@ -868,7 +916,7 @@ async def multi_redo(cb: CallbackQuery, state: FSMContext):
     passo, testo = PROMPT[kind]
     await state.update_data(kind=kind)
     await state.set_state(passo)
-    await cb.message.edit_text(testo + HINT, reply_markup=kb.back())
+    await cb.message.edit_text(testo + HINT, reply_markup=kb.nav("a:add"))
     await cb.answer("Rimanda le liste")
 
 
@@ -894,7 +942,7 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
             reply_markup=kb.admin_menu())
     await cb.message.edit_text(
         f"Test <b>non superato</b>: {res.note}\n\n{preview(item)}\n\n"
-        f"Vuoi inserirla ugualmente?", reply_markup=kb.force(cid))
+        f"Vuoi inserirla ugualmente?", reply_markup=kb.force(cid, f"a:b:{item['kind']}"))
     await cb.answer()
 
 
@@ -949,6 +997,8 @@ def _bulk_summary(cid):
     kbd = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✅ SALVA TUTTE ({len(items)})", callback_data=f"a:bok:{cid}")],
         [InlineKeyboardButton(text="☑️ SCEGLI QUALI", callback_data=f"a:bsel:{cid}")],
+        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:add")],
+        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
         [InlineKeyboardButton(text="❌ Annulla", callback_data="a:cancel")],
     ])
     return testo, kbd
@@ -983,6 +1033,7 @@ def _bulk_page(cid, page):
     kbd.append([InlineKeyboardButton(text=f"💾 SALVA SELEZIONATE ({len(sel)})",
                                      callback_data=f"a:bok:{cid}")])
     kbd.append([InlineKeyboardButton(text="⬅️ Riepilogo", callback_data=f"a:ball:{cid}")])
+    kbd.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     return testo, InlineKeyboardMarkup(inline_keyboard=kbd)
 
 
@@ -992,7 +1043,8 @@ async def bulk_input(msg: Message, state: FSMContext):
     if msg.document:
         nome = (msg.document.file_name or "").lower()
         if not nome.endswith((".txt", ".m3u", ".m3u8")):
-            return await msg.answer("Mandami un file .txt, .m3u o .m3u8")
+            return await msg.answer("Mandami un file .txt, .m3u o .m3u8",
+                                    reply_markup=kb.nav("a:add"))
         buf = io.BytesIO()
         await msg.bot.download(msg.document, destination=buf)
         testo = buf.getvalue().decode("utf-8", errors="ignore")
@@ -1004,17 +1056,19 @@ async def bulk_input(msg: Message, state: FSMContext):
         except Exception as e:
             return await msg.answer(
                 f"OCR in errore: {type(e).__name__}: {e}\n"
-                f"binario: {shutil.which('tesseract')}")
+                f"binario: {shutil.which('tesseract')}", reply_markup=kb.nav("a:add"))
         testo = (msg.caption or "") + "\n" + letto
         if not letto.strip() and not (msg.caption or "").strip():
             return await msg.answer("Ho ricevuto la foto ma non ci ho letto niente. "
-                                    "Prova a mandarla come .txt o più dritta.")
+                                    "Prova a mandarla come .txt o più dritta.",
+                                    reply_markup=kb.nav("a:add"))
     else:
         testo = msg.text or ""
 
     grezzi = detect_many(testo)
     if not grezzi:
-        return await msg.answer("Non ho trovato nessuna lista riconoscibile. Riprova o /annulla.")
+        return await msg.answer("Non ho trovato nessuna lista riconoscibile. Riprova o /annulla.",
+                                reply_markup=kb.nav("a:add"))
 
     visti, items, dup = set(), [], 0
     for it in grezzi:
@@ -1203,7 +1257,8 @@ async def _show_free(cb, kind, page):
     if sel:
         coda.append([InlineKeyboardButton(text=f"🗑 ELIMINA SELEZIONATE ({len(sel)})",
                                           callback_data=f"a:ddel:{kind or 'all'}:{page}")])
-    coda.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    coda.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:free")])
+    coda.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     await cb.message.edit_text("\n\n".join(blocchi),
                                reply_markup=InlineKeyboardMarkup(
                                    inline_keyboard=[nav] + bottoni + coda))
@@ -1261,14 +1316,18 @@ async def hist_cmd(msg: Message, state: FSMContext):
 
 @admin_router.callback_query(F.data == "a:hist")
 async def cb_hist(cb: CallbackQuery):
-    await _hist(cb.message)
+    await _hist(cb.message, edit=True)
     await cb.answer()
 
 
-async def _hist(target):
+async def _hist(target, edit=False):
     rows = await db.assignments()
     if not rows:
-        return await target.answer("Nessuna assegnazione registrata.", reply_markup=kb.admin_menu())
+        testo = "Nessuna assegnazione registrata."
+        kbd = kb.nav("a:menu")
+        if edit:
+            return await target.edit_text(testo, reply_markup=kbd)
+        return await target.answer(testo, reply_markup=kbd)
     lines = []
     for r in rows:
         who = f"@{r['username']}" if r["username"] else str(r["user_id"])
@@ -1277,9 +1336,13 @@ async def _hist(target):
                      f"{'revocata' if r['revoked'] else 'attiva'}")
     buttons = [[InlineKeyboardButton(text=f"Revoca #{r['id']}", callback_data=f"a:rev:{r['id']}")]
                for r in rows[:10]]
-    buttons.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
-    await target.answer("Ultime assegnazioni:\n\n" + "\n".join(lines),
-                        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    buttons.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
+    buttons.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
+    testo = "Ultime assegnazioni:\n\n" + "\n".join(lines)
+    kbd = InlineKeyboardMarkup(inline_keyboard=buttons)
+    if edit:
+        return await target.edit_text(testo, reply_markup=kbd)
+    await target.answer(testo, reply_markup=kbd)
 
 
 @admin_router.callback_query(F.data.startswith("a:rev:"))
@@ -1288,7 +1351,7 @@ async def revoke_cb(cb: CallbackQuery):
     await cb.answer("Revocata" if row else "Non trovata")
     if row:
         await db.log(cb.from_user.id, "revoca", str(row["id"]))
-        await _hist(cb.message)
+        await _hist(cb.message, edit=True)
 
 
 @admin_router.message(Command("revoca"))
@@ -1302,7 +1365,7 @@ async def revoca_cmd(msg: Message, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
     await msg.answer("Quale assegnazione vuoi revocare? Mandami il numero "
-                     "(lo trovi con /assegnazioni)." + HINT)
+                     "(lo trovi con /assegnazioni)." + HINT, reply_markup=kb.nav("a:hist"))
 
 
 # ==================== UTENTI ====================
@@ -1314,18 +1377,24 @@ async def users_cmd(msg: Message, state: FSMContext):
         return await _show_users(msg, p[1])
     await state.set_state(Ask.wait)
     await state.update_data(action="utenti")
-    await msg.answer("Chi vuoi cercare? Mandami ID o @username." + HINT)
+    await msg.answer("Chi vuoi cercare? Mandami ID o @username." + HINT,
+                     reply_markup=kb.nav("a:menu"))
 
 
 async def _show_users(msg, q):
     rows = await db.find_users(q)
     if not rows:
-        return await msg.answer("Nessun utente trovato.", reply_markup=kb.admin_menu())
+        return await msg.answer("Nessun utente trovato.", reply_markup=kb.nav("a:menu"))
     for r in rows:
-        await msg.answer(f"{r['full_name'] or '-'} @{r['username'] or '-'} - <code>{r['user_id']}</code>\n"
-                         f"bannato: {'si' if r['banned'] else 'no'} - prossima: {r['next_available'] or '-'}")
-        await msg.answer("Azioni:", reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[kb.user_row(r["user_id"], bool(r["banned"]))]))
+        await msg.answer(
+            f"<b>{_nome(r)}</b>\n{_utente(r)}\nID: <code>{r['user_id']}</code>\n"
+            f"bannato: {'si' if r['banned'] else 'no'} - prossima: {r['next_available'] or '-'}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [kb.open_row(r["user_id"])],
+                kb.user_row(r["user_id"], bool(r["banned"])),
+                [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")],
+                [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+            ]))
 
 
 @admin_router.callback_query(F.data.startswith("u:ban:"))
@@ -1335,7 +1404,8 @@ async def cb_ban(cb: CallbackQuery):
     await db.ban(uid, "deciso da admin")
     await db.log(cb.from_user.id, "ban", str(uid))
     await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
-        inline_keyboard=[kb.user_row(uid, True)]))
+        inline_keyboard=[[kb.open_row(uid)], kb.user_row(uid, True),
+                         [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")]]))
     await cb.answer("Bannato")
 
 
@@ -1344,7 +1414,8 @@ async def cb_unban(cb: CallbackQuery):
     uid = int(cb.data.split(":")[2])
     await db.unban(uid)
     await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(
-        inline_keyboard=[kb.user_row(uid, False)]))
+        inline_keyboard=[[kb.open_row(uid)], kb.user_row(uid, False),
+                         [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")]]))
     await cb.answer("Sbloccato")
 
 
@@ -1362,7 +1433,8 @@ async def ban_cmd(msg: Message, state: FSMContext):
         return await msg.answer(f"Utente {uid} bannato.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="ban")
-    await msg.answer("Chi vuoi bannare? Mandami ID, @username o inoltra un suo messaggio." + HINT)
+    await msg.answer("Chi vuoi bannare? Mandami ID, @username o inoltra un suo messaggio." + HINT,
+                     reply_markup=kb.nav("a:menu"))
 
 
 @admin_router.message(Command("unban"))
@@ -1377,7 +1449,8 @@ async def unban_cmd(msg: Message, state: FSMContext):
         return await msg.answer(f"Utente {uid} sbloccato.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="unban")
-    await msg.answer("Chi vuoi sbloccare? Mandami ID, @username o inoltra un suo messaggio." + HINT)
+    await msg.answer("Chi vuoi sbloccare? Mandami ID, @username o inoltra un suo messaggio." + HINT,
+                     reply_markup=kb.nav("a:menu"))
 
 
 @admin_router.message(Command("reset"))
@@ -1393,7 +1466,7 @@ async def reset_cmd(msg: Message, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="reset")
     await msg.answer("A chi vuoi azzerare l'attesa? Mandami ID, @username "
-                     "o inoltra un suo messaggio." + HINT)
+                     "o inoltra un suo messaggio." + HINT, reply_markup=kb.nav("a:menu"))
 
 
 # ==================== AMMINISTRATORI ====================
@@ -1440,7 +1513,8 @@ async def admin_add(msg: Message, state: FSMContext):
     await state.update_data(action="admin_add")
     await msg.answer("Chi vuoi aggiungere come amministratore?\n\n"
                      "Mandami lo @username: funziona anche se non ha mai scritto al bot.\n"
-                     "In alternativa l'ID numerico o un messaggio inoltrato." + HINT)
+                     "In alternativa l'ID numerico o un messaggio inoltrato." + HINT,
+                     reply_markup=kb.nav("a:menu"))
 
 
 @admin_router.message(Command("admin_del"))
@@ -1452,7 +1526,7 @@ async def admin_del(msg: Message, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="admin_del")
     await msg.answer("Chi vuoi rimuovere dagli amministratori? Mandami ID, @username "
-                     "o inoltra un suo messaggio." + HINT)
+                     "o inoltra un suo messaggio." + HINT, reply_markup=kb.nav("a:menu"))
 
 
 PER_PAGE = 8
@@ -1467,14 +1541,16 @@ async def _show_users_page(cb, page):
     tot = await db.count_users(config.SUPER_ADMINS)
     righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
     if not tot:
-        await cb.message.edit_text("Nessun utente normale registrato.", reply_markup=kb.admin_menu())
+        await cb.message.edit_text("Nessun utente normale registrato.",
+                                   reply_markup=kb.nav("a:menu"))
         return
     tastiera = []
     for r in righe:
-        nome = (r["full_name"] or r["username"] or str(r["user_id"]))[:26]
+        nome = _nome(r)[:20]
         stato = "🚫" if r["banned"] else "✅"
         tastiera.append([
-            InlineKeyboardButton(text=f"{stato} {nome}", callback_data="a:noop"),
+            InlineKeyboardButton(text=f"{stato} {nome} · {_utente(r)} · {r['user_id']}",
+                                 url=f"tg://user?id={r['user_id']}"),
             InlineKeyboardButton(
                 text=("Sblocca" if r["banned"] else "Banna"),
                 callback_data=f"lb:{'unban' if r['banned'] else 'ban'}:{r['user_id']}:{page}"),
@@ -1487,7 +1563,8 @@ async def _show_users_page(cb, page):
     if (page + 1) * PER_PAGE < tot:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:allusers:{page + 1}"))
     tastiera.append(nav)
-    tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
+    tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     await cb.message.edit_text(f"👤 Utenti normali: {tot}",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
 
@@ -1519,13 +1596,14 @@ async def _show_banned_page(cb, page):
     tot = await db.count_banned()
     righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
     if not tot:
-        await cb.message.edit_text("Nessun utente bannato.", reply_markup=kb.admin_menu())
+        await cb.message.edit_text("Nessun utente bannato.", reply_markup=kb.nav("a:menu"))
         return
     tastiera = []
     for r in righe:
-        nome = (r["full_name"] or r["username"] or str(r["user_id"]))[:24]
+        nome = _nome(r)[:18]
         tastiera.append([
-            InlineKeyboardButton(text=f"🚫 {nome}", callback_data="a:noop"),
+            InlineKeyboardButton(text=f"🚫 {nome} · {_utente(r)} · {r['user_id']}",
+                                 url=f"tg://user?id={r['user_id']}"),
             InlineKeyboardButton(text="Sblocca",
                                  callback_data=f"lb:unban:{r['user_id']}:{page}"),
         ])
@@ -1537,7 +1615,8 @@ async def _show_banned_page(cb, page):
     if (page + 1) * PER_PAGE < tot:
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:banned:{page + 1}"))
     tastiera.append(nav)
-    tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
+    tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     await cb.message.edit_text(f"🚫 Utenti bannati: {tot}",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
 
@@ -1558,22 +1637,24 @@ async def _show_admins(cb):
     tastiera = []
     for uid in proprietari:
         tastiera.append([
-            InlineKeyboardButton(text=f"👑 {uid}", callback_data="a:noop"),
+            InlineKeyboardButton(text=f"👑 {uid}", url=f"tg://user?id={uid}"),
             InlineKeyboardButton(text="proprietario", callback_data="a:noop"),
         ])
     for r in altri:
-        nome = (r["username"] or str(r["user_id"]))[:24]
+        nome = (r["username"] or str(r["user_id"]))[:22]
         tastiera.append([
-            InlineKeyboardButton(text=f"🛡 {nome}", callback_data="a:noop"),
+            InlineKeyboardButton(text=f"🛡 {nome} · {r['user_id']}",
+                                 url=f"tg://user?id={r['user_id']}"),
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmadmin:{r['user_id']}"),
         ])
     for r in nomi:
-        nome = r["username"][:24]
+        nome = r["username"][:22]
         tastiera.append([
             InlineKeyboardButton(text=f"🛡 @{nome}", callback_data="a:noop"),
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmname:{nome}"),
         ])
-    tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
+    tastiera.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
+    tastiera.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     await cb.message.edit_text(
         f"👑 Proprietario: {len(proprietari)} · 🛡 Admin: {len(altri) + len(nomi)}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
@@ -1611,14 +1692,16 @@ async def cooldown_cmd(msg: Message, state: FSMContext):
     p = msg.text.split(maxsplit=1)
     if len(p) > 1:
         if not p[1].isdigit():
-            return await msg.answer("Serve un numero di giorni, per esempio /cooldown 7")
+            return await msg.answer("Serve un numero di giorni, per esempio /cooldown 7",
+                                    reply_markup=kb.nav("a:set"))
         await db.set_setting("cooldown_days", p[1])
         return await msg.answer(f"Attesa impostata a {p[1]} giorni.", reply_markup=kb.admin_menu())
     attuale = await db.get_int("cooldown_days")
     await state.set_state(Ask.wait)
     await state.update_data(action="cooldown")
     await msg.answer(f"L'attesa è impostata a <b>{attuale} giorni</b>.\n\n"
-                     f"Da quanti giorni la vuoi? Mandami un numero." + HINT)
+                     f"Da quanti giorni la vuoi? Mandami un numero." + HINT,
+                     reply_markup=kb.nav("a:set"))
 
 
 @admin_router.message(Command("setgroup"))
@@ -1637,7 +1720,7 @@ async def setgroup_cmd(msg: Message, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="setgroup")
     await msg.answer("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
-                     "/setgroup dentro il gruppo." + HINT)
+                     "/setgroup dentro il gruppo." + HINT, reply_markup=kb.nav("a:set"))
 
 
 @admin_router.message(Command("setlink"))
@@ -1649,7 +1732,8 @@ async def setlink_cmd(msg: Message, state: FSMContext):
         return await msg.answer("Link salvato.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="setlink")
-    await msg.answer("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT)
+    await msg.answer("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT,
+                     reply_markup=kb.nav("a:set"))
 
 
 @admin_router.message(Command("toggle"))
@@ -1668,7 +1752,8 @@ async def _settings_kb():
 
 
 @admin_router.callback_query(F.data == "a:set")
-async def cb_set(cb: CallbackQuery):
+async def cb_set(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
     await cb.message.edit_text("Impostazioni", reply_markup=await _settings_kb())
     await cb.answer()
 
@@ -1703,7 +1788,8 @@ async def s_cool(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="cooldown")
     await cb.message.edit_text(f"L'attesa è impostata a <b>{attuale} giorni</b>.\n\n"
-                               f"Da quanti giorni la vuoi?" + HINT)
+                               f"Da quanti giorni la vuoi?" + HINT,
+                               reply_markup=kb.nav("a:set"))
     await cb.answer()
 
 
@@ -1712,7 +1798,8 @@ async def s_group(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="setgroup")
     await cb.message.edit_text("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
-                            "/setgroup dentro il gruppo." + HINT)
+                               "/setgroup dentro il gruppo." + HINT,
+                               reply_markup=kb.nav("a:set"))
     await cb.answer()
 
 
@@ -1720,28 +1807,32 @@ async def s_group(cb: CallbackQuery, state: FSMContext):
 async def s_link(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="setlink")
-    await cb.message.edit_text("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT)
+    await cb.message.edit_text("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT,
+                               reply_markup=kb.nav("a:set"))
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "s:wel")
 async def s_wel(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SetTxt.welcome)
-    await cb.message.edit_text("Invia il nuovo testo di benvenuto. Puoi usare {name} e {days}." + HINT)
+    await cb.message.edit_text("Invia il nuovo testo di benvenuto. Puoi usare {name} e {days}." + HINT,
+                               reply_markup=kb.nav("a:set"))
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "s:deny")
 async def s_deny(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SetTxt.deny)
-    await cb.message.edit_text("Invia il nuovo testo di rifiuto. Puoi usare {when} e {left}." + HINT)
+    await cb.message.edit_text("Invia il nuovo testo di rifiuto. Puoi usare {when} e {left}." + HINT,
+                               reply_markup=kb.nav("a:set"))
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "s:ntext")
 async def s_ntext(cb: CallbackQuery, state: FSMContext):
     await state.set_state(SetTxt.not_member)
-    await cb.message.edit_text("Invia il nuovo testo di blocco. Puoi usare {link}." + HINT)
+    await cb.message.edit_text("Invia il nuovo testo di blocco. Puoi usare {link}." + HINT,
+                               reply_markup=kb.nav("a:set"))
     await cb.answer()
 
 
@@ -1807,7 +1898,8 @@ async def ask_input(msg: Message, state: FSMContext):
 
     if action == "cooldown":
         if not raw.strip().isdigit():
-            return await msg.answer("Serve un numero. Riprova o scrivi /annulla.")
+            return await msg.answer("Serve un numero. Riprova o scrivi /annulla.",
+                                    reply_markup=kb.nav("a:set"))
         await db.set_setting("cooldown_days", raw.strip())
         await state.clear()
         return await msg.answer(f"Attesa impostata a {raw.strip()} giorni.",
@@ -1815,7 +1907,8 @@ async def ask_input(msg: Message, state: FSMContext):
 
     if action == "setlink":
         if not raw.strip().startswith("http"):
-            return await msg.answer("Serve un link che inizi con http. Riprova o scrivi /annulla.")
+            return await msg.answer("Serve un link che inizi con http. Riprova o scrivi /annulla.",
+                                    reply_markup=kb.nav("a:set"))
         await db.set_setting("group_link", raw.strip())
         await state.clear()
         return await msg.answer("Link salvato.", reply_markup=kb.admin_menu())
@@ -1832,7 +1925,8 @@ async def ask_input(msg: Message, state: FSMContext):
 
     if action == "revoca":
         if not raw.strip().isdigit():
-            return await msg.answer("Serve il numero dell'assegnazione. Riprova o scrivi /annulla.")
+            return await msg.answer("Serve il numero dell'assegnazione. Riprova o scrivi /annulla.",
+                                    reply_markup=kb.nav("a:hist"))
         row = await db.revoke(int(raw.strip()))
         await state.clear()
         return await msg.answer("Assegnazione revocata." if row else "Assegnazione non trovata.",
