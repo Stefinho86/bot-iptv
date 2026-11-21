@@ -74,6 +74,13 @@ def _human(delta):
     return " ".join(out) or "pochi minuti"
 
 
+def _quadro(s):
+    return (f"<b>Pannello admin</b>\n\n"
+            f"📋 Libere: {s['free']} · 📤 Assegnate: {s['assigned']}\n"
+            f"👤 Utenti: {s['users']} · 🛡 Admin: {s['admins']} · 👑 Proprietario: {s['super']}\n"
+            f"🚫 Bannati: {s['banned']}")
+
+
 def _payload_text(kind, p):
     if kind == "xtream":
         return (f"Server: <code>{p['server']}</code>\nUtente: <code>{p['username']}</code>\n"
@@ -234,11 +241,7 @@ async def start_verify(msg: Message, command: CommandObject, bot: Bot):
 async def start(msg: Message, bot: Bot):
     await db.touch_user(msg.from_user.id, msg.from_user.username, msg.from_user.full_name)
     if await kb.is_admin_event(msg):
-        s = await db.stats()
-        return await msg.answer(
-            f"Pannello admin\n\nLibere: {s['free']} | Assegnate: {s['assigned']} | "
-            f"Utenti: {s['users']} | Bannati: {s['banned']}",
-            reply_markup=kb.admin_menu())
+        return await msg.answer(_quadro(await db.stats()), reply_markup=kb.admin_menu())
     if not await kb.member_ok(bot, msg.from_user.id):
         return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
     await _welcome(msg)
@@ -339,10 +342,7 @@ async def deliver(msg, user, bot, adm=False):
 @admin_router.message(Command("admin"))
 async def panel(msg: Message, state: FSMContext):
     await state.clear()
-    s = await db.stats()
-    await msg.answer(f"Pannello admin\n\nLibere: {s['free']} | Assegnate: {s['assigned']} | "
-                     f"Utenti: {s['users']} | Bannati: {s['banned']}",
-                     reply_markup=kb.admin_menu())
+    await msg.answer(_quadro(await db.stats()), reply_markup=kb.admin_menu())
 
 
 @admin_router.message(Command("stato"))
@@ -407,16 +407,13 @@ async def cb_verify(cb: CallbackQuery, bot: Bot):
 @admin_router.callback_query(F.data == "a:menu")
 async def cb_menu(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("Pannello admin:", reply_markup=kb.admin_menu())
+    await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.admin_menu())
     await cb.answer()
 
 
 @admin_router.callback_query(F.data == "a:stats")
 async def cb_stats(cb: CallbackQuery):
-    s = await db.stats()
-    await cb.message.edit_text(
-        f"Libere: {s['free']}\nAssegnate: {s['assigned']}\n"
-        f"Utenti: {s['users']}\nBannati: {s['banned']}", reply_markup=kb.back())
+    await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.back())
     await cb.answer()
 
 
@@ -1271,7 +1268,7 @@ async def _show_users_page(cb, page):
     tot = await db.count_users(config.SUPER_ADMINS)
     righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
     if not tot:
-        await cb.message.edit_text("Nessun utente registrato.", reply_markup=kb.back())
+        await cb.message.edit_text("Nessun utente normale registrato.", reply_markup=kb.back())
         return
     tastiera = []
     for r in righe:
@@ -1292,7 +1289,7 @@ async def _show_users_page(cb, page):
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:allusers:{page + 1}"))
     tastiera.append(nav)
     tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
-    await cb.message.edit_text(f"Utenti registrati: {tot}",
+    await cb.message.edit_text(f"👤 Utenti normali: {tot}",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
@@ -1342,7 +1339,7 @@ async def _show_banned_page(cb, page):
         nav.append(InlineKeyboardButton(text="▶️", callback_data=f"a:banned:{page + 1}"))
     tastiera.append(nav)
     tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
-    await cb.message.edit_text(f"Utenti bannati: {tot}",
+    await cb.message.edit_text(f"🚫 Utenti bannati: {tot}",
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
@@ -1357,12 +1354,15 @@ async def cb_banned(cb: CallbackQuery):
 async def _show_admins(cb):
     righe = await db.all_admins()
     nomi = await db.list_admin_names()
-    if not righe and not nomi:
-        await cb.message.edit_text("Nessun admin aggiuntivo, solo i super-admin.",
-                                   reply_markup=kb.back())
-        return
+    proprietari = sorted(config.SUPER_ADMINS)
+    altri = [r for r in righe if r["user_id"] not in config.SUPER_ADMINS]
     tastiera = []
-    for r in righe:
+    for uid in proprietari:
+        tastiera.append([
+            InlineKeyboardButton(text=f"👑 {uid}", callback_data="a:noop"),
+            InlineKeyboardButton(text="proprietario", callback_data="a:noop"),
+        ])
+    for r in altri:
         nome = (r["username"] or str(r["user_id"]))[:24]
         tastiera.append([
             InlineKeyboardButton(text=f"🛡 {nome}", callback_data="a:noop"),
@@ -1375,8 +1375,10 @@ async def _show_admins(cb):
             InlineKeyboardButton(text="Rimuovi", callback_data=f"a:rmname:{nome}"),
         ])
     tastiera.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
-    await cb.message.edit_text(f"Amministratori: {len(righe) + len(nomi)}",
-                               reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
+    totale = len(proprietari) + len(altri) + len(nomi)
+    await cb.message.edit_text(
+        f"👑 Proprietario: {len(proprietari)} · 🛡 Admin: {len(altri) + len(nomi)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=tastiera))
 
 
 @admin_router.callback_query(F.data == "a:alladmins")
