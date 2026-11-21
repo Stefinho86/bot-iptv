@@ -145,6 +145,18 @@ def _etichetta(r, stato=""):
     return f"{stato} {nome} {user} · {r['user_id']}"[:48]
 
 
+def _voce(n, r, bannato=False, motivo=None):
+    """Riga completa: nome cliccabile, username, ID. Niente tagli."""
+    link = _link(r["user_id"], r["username"])
+    nome = _esc(_nome(r))
+    u = _pulisci_user(r["username"])
+    utente = f"@{_esc(u)}" if u else "no username"
+    segno = "🚫" if bannato else "✅"
+    coda = f"\n      motivo: {_esc(motivo)}" if motivo else ""
+    return (f"{segno} {n}. <a href=\"{link}\">{nome}</a>\n"
+            f"      {utente} · ID <code>{r['user_id']}</code>{coda}")
+
+
 async def _edit(target, testo, kbd=None):
     try:
         await target.edit_text(testo, reply_markup=kbd)
@@ -460,24 +472,27 @@ async def _mostra_utenti(msg, page, edit=True, cb=None, nota="", ok_testo=""):
                                      kbd, kbd, edit)
             return await _esito(cb, errore, nota, ok_testo)
         page, pagine, righe = _taglio(tutti, page)
-        con_url, senza_url = [], []
-        for r in righe:
+        inizio = page * PER_PAGE
+        con_url, senza_url, voci = [], [], []
+        for scarto, r in enumerate(righe, 1):
+            n = inizio + scarto
             bannato = bool(r["banned"])
+            link = _link(r["user_id"], r["username"])
             azione = f"lb:{'unban' if bannato else 'ban'}:{r['user_id']}:{page}"
-            etichetta = _etichetta(r, "🚫" if bannato else "✅")
+            voci.append(_voce(n, r, bannato))
             con_url.append([
-                InlineKeyboardButton(text=etichetta, url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text=f"💬 {n}", url=link),
                 InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
                                      callback_data=azione),
             ])
             senza_url.append([
-                InlineKeyboardButton(text=etichetta, callback_data="a:noop"),
+                InlineKeyboardButton(text=f"💬 {n}", callback_data="a:noop"),
                 InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
                                      callback_data=azione),
             ])
         coda = "" if pagine > 1 else "\nUnica pagina."
         testo = (f"👤 Utenti normali: {tot} — pagina {page + 1} di {pagine}{coda}\n"
-                 f"Tocca il nome per aprire la chat.")
+                 f"Tocca il nome o «💬 n» per aprire la chat.\n\n" + "\n\n".join(voci))
         errore = await _pubblica(
             msg, testo,
             InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:u", page, pagine)),
@@ -499,24 +514,26 @@ async def _mostra_bannati(msg, page, edit=True, cb=None, nota="", ok_testo=""):
             errore = await _pubblica(msg, "Nessun utente bannato.", kbd, kbd, edit)
             return await _esito(cb, errore, nota, ok_testo)
         page, pagine, righe = _taglio(tutti, page)
-        con_url, senza_url = [], []
-        for r in righe:
-            etichetta = _etichetta(r, "🚫")
+        inizio = page * PER_PAGE
+        con_url, senza_url, voci = [], [], []
+        for scarto, r in enumerate(righe, 1):
+            n = inizio + scarto
+            link = _link(r["user_id"], r["username"])
             azione = f"lb:unban:{r['user_id']}:{page}"
+            voci.append(_voce(n, r, True, r["ban_reason"] or "senza motivo"))
             con_url.append([
-                InlineKeyboardButton(text=etichetta, url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text=f"💬 {n}", url=link),
                 InlineKeyboardButton(text="Sblocca", callback_data=azione),
             ])
             senza_url.append([
-                InlineKeyboardButton(text=etichetta, callback_data="a:noop"),
+                InlineKeyboardButton(text=f"💬 {n}", callback_data="a:noop"),
                 InlineKeyboardButton(text="Sblocca", callback_data=azione),
             ])
-            motivo = (r["ban_reason"] or "senza motivo")[:20]
-            con_url.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
-            senza_url.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
         coda = "" if pagine > 1 else "\nUnica pagina."
+        testo = (f"🚫 Utenti bannati: {tot} — pagina {page + 1} di {pagine}{coda}\n"
+                 f"Tocca il nome o «💬 n» per aprire la chat.\n\n" + "\n\n".join(voci))
         errore = await _pubblica(
-            msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1} di {pagine}{coda}",
+            msg, testo,
             InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:n", page, pagine)),
             InlineKeyboardMarkup(inline_keyboard=senza_url + _chiusura("a:n", page, pagine)),
             edit)
