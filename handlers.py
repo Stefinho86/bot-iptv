@@ -180,33 +180,41 @@ async def _mostra(cb, testo, kbd=None):
     return False
 
 
-async def _invia_o_modifica(msg, testo, kbd, edit=True):
-    """None se mostrata, NONMOD se identica, altrimenti l'eccezione."""
+async def _pubblica(msg, testo, kbd_url, kbd_senza_url, edit=True):
+    """Modifica con URL, poi modifica senza URL, poi nuovo messaggio.
+    None se mostrata, NONMOD se identica, altrimenti l'eccezione."""
     if edit:
         try:
-            await msg.edit_text(testo, reply_markup=kbd)
+            await msg.edit_text(testo, reply_markup=kbd_url)
             return None
         except Exception as e:
             if "not modified" in str(e).lower():
                 return NONMOD
     try:
-        await msg.answer(testo, reply_markup=kbd)
+        await msg.edit_text(testo, reply_markup=kbd_senza_url)
+        return None
+    except Exception:
+        pass
+    try:
+        await msg.answer(testo, reply_markup=kbd_senza_url)
         return None
     except Exception as e:
         return e
 
 
-async def _esito(cb, errore, nota=""):
+async def _esito(cb, errore, nota="", ok_testo=""):
+    """Unica risposta al callback: cosi' l'avviso si vede sempre."""
     if cb is None:
         return
     try:
         if errore is NONMOD:
             await cb.answer(nota or "Nessuna modifica", show_alert=True)
         elif errore is not None:
-            await cb.answer(f"Invio fallito: {type(errore).__name__}: {errore}"[:195],
-                            show_alert=True)
-    except Exception:
-        pass
+            await cb.answer(f"ERRORE: {type(errore).__name__}: {errore}"[:195], show_alert=True)
+        else:
+            await cb.answer(ok_testo)
+    except Exception as e:
+        print(f"esito: {type(e).__name__}: {e}")
 
 
 async def _avvisa(cb, e):
@@ -214,7 +222,7 @@ async def _avvisa(cb, e):
     if cb is None:
         return
     try:
-        await cb.answer(f"{type(e).__name__}: {e}"[:195], show_alert=True)
+        await cb.answer(f"ERRORE: {type(e).__name__}: {e}"[:195], show_alert=True)
     except Exception:
         pass
 
@@ -359,6 +367,7 @@ def _pulisci(uid):
 
 # ==================== PAGINE ====================
 async def _sono_admin(cb):
+    """Risponde solo se NON e' admin: e' l'unica risposta in quel caso."""
     try:
         if await kb.is_admin_cb(cb):
             return True
@@ -372,19 +381,11 @@ async def _sono_admin(cb):
     return False
 
 
-async def _rispondi(cb):
-    try:
-        await cb.answer()
-    except Exception as e:
-        print(f"answer: {type(e).__name__}: {e}")
-
-
 def _pagine(tot):
     return max(1, (tot + PER_PAGE - 1) // PER_PAGE)
 
 
 def _taglio(righe, page):
-    """Taglia le righe vere. Se la pagina chiesta è vuota torna alla prima."""
     pagine = _pagine(len(righe))
     page = max(0, min(int(page), pagine - 1))
     fetta = righe[page * PER_PAGE:(page + 1) * PER_PAGE]
@@ -396,21 +397,13 @@ def _taglio(righe, page):
 
 
 def _coppia(data):
-    """Legge a:u:<pagina>:<corrente> (o a:n:...) oppure lu:p:<pagina>:<corrente>:... oppure lu:<pagina>."""
+    """Legge a:u:<pagina>:<corrente> (o a:n:...) oppure lu:<pagina>."""
     pezzi = (data or "").split(":")
-    # Nuovo formato: a:u:pagina:corrente
     if len(pezzi) >= 4 and pezzi[1] in ("u", "n"):
         try:
             return int(pezzi[2]), int(pezzi[3])
         except ValueError:
             pass
-    # Vecchio formato: lu:p:pagina:corrente:pagine o lp:p:...
-    if len(pezzi) >= 5 and pezzi[1] == "p":
-        try:
-            return int(pezzi[2]), int(pezzi[3])
-        except ValueError:
-            pass
-    # Formato semplice: lu:pagina o lp:pagina
     if len(pezzi) >= 2:
         try:
             return int(pezzi[1]), None
@@ -420,7 +413,6 @@ def _coppia(data):
 
 
 def _nav_pagine(prefisso, page, pagine):
-    """prefisso e' a:u (utenti) oppure a:n (bannati)."""
     return [
         InlineKeyboardButton(text="◀️",
                              callback_data=f"{prefisso}:{max(0, page - 1)}:{page}"),
@@ -446,80 +438,94 @@ def _coda_pagina():
     ]
 
 
-async def _mostra_utenti(msg, page, edit=True, cb=None, nota=""):
+def _chiusura(prefisso, page, pagine):
+    righe = []
+    numeri = _numeri_pagina(prefisso, page, pagine)
+    if numeri:
+        righe.append(numeri)
+    righe.append(_nav_pagine(prefisso, page, pagine))
+    righe += _coda_pagina()
+    return righe
+
+
+async def _mostra_utenti(msg, page, edit=True, cb=None, nota="", ok_testo=""):
     try:
         if msg is None:
-            return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
-        tot = await db.count_users(config.SUPER_ADMINS)
+            return await _esito(cb, RuntimeError("nessun messaggio"), nota, ok_testo)
+        tutti = list(await db.all_users_list(config.SUPER_ADMINS))
+        tot = len(tutti)
         if not tot:
-            errore = await _invia_o_modifica(msg, "Nessun utente normale registrato.",
-                                             kb.nav("a:menu"), edit)
-            return await _esito(cb, errore, nota)
-        pagine = _pagine(tot)
-        page = max(0, min(int(page), pagine - 1))
-        righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
-        tastiera = []
+            kbd = kb.nav("a:menu")
+            errore = await _pubblica(msg, "Nessun utente normale registrato.",
+                                     kbd, kbd, edit)
+            return await _esito(cb, errore, nota, ok_testo)
+        page, pagine, righe = _taglio(tutti, page)
+        con_url, senza_url = [], []
         for r in righe:
             bannato = bool(r["banned"])
-            tastiera.append([
-                InlineKeyboardButton(text=_etichetta(r, "🚫" if bannato else "✅"),
-                                     url=_link(r["user_id"], r["username"])),
+            azione = f"lb:{'unban' if bannato else 'ban'}:{r['user_id']}:{page}"
+            etichetta = _etichetta(r, "🚫" if bannato else "✅")
+            con_url.append([
+                InlineKeyboardButton(text=etichetta, url=_link(r["user_id"], r["username"])),
                 InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
-                                     callback_data=f"lb:{'unban' if bannato else 'ban'}:"
-                                                   f"{r['user_id']}:{page}"),
+                                     callback_data=azione),
             ])
-        numeri = _numeri_pagina("a:u", page, pagine)
-        if numeri:
-            tastiera.append(numeri)
-        tastiera.append(_nav_pagine("a:u", page, pagine))
-        tastiera += _coda_pagina()
+            senza_url.append([
+                InlineKeyboardButton(text=etichetta, callback_data="a:noop"),
+                InlineKeyboardButton(text=("Sblocca" if bannato else "Banna"),
+                                     callback_data=azione),
+            ])
         coda = "" if pagine > 1 else "\nUnica pagina."
         testo = (f"👤 Utenti normali: {tot} — pagina {page + 1} di {pagine}{coda}\n"
                  f"Tocca il nome per aprire la chat.")
-        errore = await _invia_o_modifica(msg, testo,
-                                         InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
-        await _esito(cb, errore, nota or f"Sei già a pagina {page + 1} di {pagine}")
+        errore = await _pubblica(
+            msg, testo,
+            InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:u", page, pagine)),
+            InlineKeyboardMarkup(inline_keyboard=senza_url + _chiusura("a:u", page, pagine)),
+            edit)
+        await _esito(cb, errore, nota or f"Sei già a pagina {page + 1} di {pagine}", ok_testo)
     except Exception as e:
         await _avvisa(cb, e)
 
 
-async def _mostra_bannati(msg, page, edit=True, cb=None, nota=""):
+async def _mostra_bannati(msg, page, edit=True, cb=None, nota="", ok_testo=""):
     try:
         if msg is None:
-            return await _esito(cb, RuntimeError("nessun messaggio da modificare"))
-        tot = await db.count_banned()
+            return await _esito(cb, RuntimeError("nessun messaggio"), nota, ok_testo)
+        tutti = list(await db.banned_users_list())
+        tot = len(tutti)
         if not tot:
-            errore = await _invia_o_modifica(msg, "Nessun utente bannato.",
-                                             kb.nav("a:menu"), edit)
-            return await _esito(cb, errore, nota)
-        pagine = _pagine(tot)
-        page = max(0, min(int(page), pagine - 1))
-        righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
-        tastiera = []
+            kbd = kb.nav("a:menu")
+            errore = await _pubblica(msg, "Nessun utente bannato.", kbd, kbd, edit)
+            return await _esito(cb, errore, nota, ok_testo)
+        page, pagine, righe = _taglio(tutti, page)
+        con_url, senza_url = [], []
         for r in righe:
-            motivo = (r["ban_reason"] or "senza motivo")[:20]
-            tastiera.append([
-                InlineKeyboardButton(text=_etichetta(r, "🚫"), url=_link(r["user_id"], r["username"])),
-                InlineKeyboardButton(text="Sblocca",
-                                     callback_data=f"lb:unban:{r['user_id']}:{page}"),
+            etichetta = _etichetta(r, "🚫")
+            azione = f"lb:unban:{r['user_id']}:{page}"
+            con_url.append([
+                InlineKeyboardButton(text=etichetta, url=_link(r["user_id"], r["username"])),
+                InlineKeyboardButton(text="Sblocca", callback_data=azione),
             ])
-            tastiera.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
-        numeri = _numeri_pagina("a:n", page, pagine)
-        if numeri:
-            tastiera.append(numeri)
-        tastiera.append(_nav_pagine("a:n", page, pagine))
-        tastiera += _coda_pagina()
+            senza_url.append([
+                InlineKeyboardButton(text=etichetta, callback_data="a:noop"),
+                InlineKeyboardButton(text="Sblocca", callback_data=azione),
+            ])
+            motivo = (r["ban_reason"] or "senza motivo")[:20]
+            con_url.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
+            senza_url.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
         coda = "" if pagine > 1 else "\nUnica pagina."
-        errore = await _invia_o_modifica(
+        errore = await _pubblica(
             msg, f"🚫 Utenti bannati: {tot} — pagina {page + 1} di {pagine}{coda}",
-            InlineKeyboardMarkup(inline_keyboard=tastiera), edit)
-        await _esito(cb, errore, nota or f"Sei già a pagina {page + 1} di {pagine}")
+            InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:n", page, pagine)),
+            InlineKeyboardMarkup(inline_keyboard=senza_url + _chiusura("a:n", page, pagine)),
+            edit)
+        await _esito(cb, errore, nota or f"Sei già a pagina {page + 1} di {pagine}", ok_testo)
     except Exception as e:
         await _avvisa(cb, e)
 
 
 async def _apri_utenti(cb, page, corrente=None):
-    await _rispondi(cb)
     if not await _sono_admin(cb):
         return
     nota = f"Sei già a pagina {page + 1}" if corrente is not None and page == corrente else ""
@@ -527,7 +533,6 @@ async def _apri_utenti(cb, page, corrente=None):
 
 
 async def _apri_bannati(cb, page, corrente=None):
-    await _rispondi(cb)
     if not await _sono_admin(cb):
         return
     nota = f"Sei già a pagina {page + 1}" if corrente is not None and page == corrente else ""
@@ -537,7 +542,7 @@ async def _apri_bannati(cb, page, corrente=None):
 @page_router.callback_query(F.data == "a:noop")
 @admin_router.callback_query(F.data == "a:noop")
 async def cb_noop(cb: CallbackQuery):
-    await _rispondi(cb)
+    await _esito(cb, None)
 
 
 @page_router.callback_query(F.data == "a:allusers")
@@ -590,12 +595,12 @@ async def cb_lista_ban(cb: CallbackQuery):
     await db.ensure_user(uid)
     if azione == "unban":
         await db.unban(uid)
-        await cb.answer("Sbloccato")
+        ok = "Sbloccato"
     else:
         await db.ban(uid, "deciso da admin")
         await db.log(cb.from_user.id, "ban", str(uid))
-        await cb.answer("Bannato")
-    await _mostra_utenti(cb.message, page, edit=True, cb=cb)
+        ok = "Bannato"
+    await _mostra_utenti(cb.message, page, edit=True, cb=cb, ok_testo=ok)
 
 
 # ==================== VERIFICA ANONIMI ====================
