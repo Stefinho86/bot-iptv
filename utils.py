@@ -67,7 +67,7 @@ async def is_admin_cb(cb) -> bool:
         if not cb.message:
             return False
         return await anon_is_admin(cb.message.chat.id)
-    return await db.is_admin(cb.from_user.id)
+    return await db.is_admin(cb.from_user.id, cb.from_user.username)
 
 
 class Trigger(BaseFilter):
@@ -106,7 +106,8 @@ def admin_menu():
         [B(text="➕ Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="🔁 Reset attesa", callback_data="a:reset"), B(text="⏳ Cooldown", callback_data="s:cool")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
-        [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
+        [B(text="📦 Esporta", callback_data="a:exp"), B(text="📄 Log attività", callback_data="a:log")],
+        [B(text="📖 Comandi", callback_data="a:comandi"), B(text="♻️ Ricarica bot", callback_data="a:reload")],
         [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="🩺 Stato", callback_data="a:stato")],
         [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
     ])
@@ -134,7 +135,14 @@ def kinds():
 
 def confirm(cid):
     return K(inline_keyboard=[
-        [B(text="✅ CONFERMA E SALVA", callback_data=f"a:ok:{cid}")],
+        [B(text="🧪 TESTA E SALVA", callback_data=f"a:ok:{cid}")],
+        [B(text="❌ Annulla", callback_data="a:cancel")],
+    ])
+
+
+def force(cid):
+    return K(inline_keyboard=[
+        [B(text="✅ INSERISCI UGUALMENTE", callback_data=f"a:force:{cid}")],
         [B(text="❌ Annulla", callback_data="a:cancel")],
     ])
 
@@ -176,6 +184,7 @@ async def member_ok(bot, uid):
     if m.status in ("creator", "administrator", "member"):
         return True
     return bool(m.status == "restricted" and getattr(m, "is_member", False))
+
 
 async def not_member_text():
     txt = await db.get_setting("not_member")
