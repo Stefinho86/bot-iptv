@@ -111,6 +111,59 @@ def _quadro(s):
             f"🕐 {_ora(dt.datetime.now(dt.timezone.utc))}")
 
 
+async def _statistiche_text():
+    s = await db.stats()
+    gid = await db.get_group_id()
+    gonly = await db.get_int("group_only")
+    en = await db.get_int("enabled")
+    cool = await db.get_int("cooldown_days")
+    return ("<b>📊 Statistiche</b>\n\n"
+            f"📋 Liste libere: <b>{s['free']}</b>\n"
+            f"📤 Liste assegnate: <b>{s['assigned']}</b>\n"
+            f"🗂 Totale liste: <b>{s['free'] + s['assigned']}</b>\n\n"
+            f"👤 Utenti: <b>{s['users']}</b>\n"
+            f"🚫 Bannati: <b>{s['banned']}</b>\n"
+            f"🛡 Admin: <b>{s['admins']}</b> · 👑 Proprietario: <b>{s['super']}</b>\n\n"
+            f"👥 Gruppo: <code>{gid or 'non impostato'}</code>\n"
+            f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF (tutti passano)'}\n"
+            f"⚡ Bot: {'ATTIVO' if en else 'SPENTO'}\n"
+            f"⏳ Attesa: {cool} giorni\n\n"
+            f"🕐 {_ora(dt.datetime.now(dt.timezone.utc))}")
+
+
+def _comandi_text():
+    return ("<b>Comandi</b>\n\n"
+            "<b>Liste</b>\n"
+            "/aggiungi - inserisci una lista (M3U, Xtream, Stalker, foto o txt)\n"
+            "/liberi - liste non assegnate\n"
+            "/assegnazioni - storico consegne\n"
+            "/revoca - ritira un'assegnazione\n"
+            "/esporta - esporta le liste libere in JSON\n"
+            "/log - scarica il file di log\n\n"
+            "<b>Utenti</b>\n"
+            "/utenti - cerca un utente\n"
+            "/elenco - elenco utenti a pagine\n"
+            "/bannati - elenco utenti bannati\n"
+            "/ban - blocca un utente\n"
+            "/unban - sblocca un utente\n"
+            "/reset - azzera l'attesa\n\n"
+            "<b>Amministratori</b>\n"
+            "/admin_add - aggiungi amministratore\n"
+            "/admin_del - rimuovi amministratore\n"
+            "/verifica - riverifica un admin anonimo\n"
+            "/deverifica - revoca la verifica\n\n"
+            "<b>Sistema</b>\n"
+            "/admin - pannello\n"
+            "/stato - diagnostica\n"
+            "/comandi - questo elenco\n"
+            "/cooldown - giorni di attesa\n"
+            "/setgroup - gruppo autorizzato\n"
+            "/setlink - link d'invito\n"
+            "/toggle - accendi o spegni il bot\n"
+            "/annulla - interrompi\n\n"
+            "Tutti i comandi sugli utenti accettano ID, @username o inoltro.")
+
+
 def _payload_text(kind, p):
     if kind == "xtream":
         return (f"Server: <code>{p['server']}</code>\nUtente: <code>{p['username']}</code>\n"
@@ -837,33 +890,7 @@ async def cb_stato(cb: CallbackQuery, bot: Bot):
 @admin_router.message(Command("comandi"))
 async def comandi_cmd(msg: Message, state: FSMContext):
     await state.clear()
-    await msg.answer(
-        "<b>Comandi</b>\n\n"
-        "/admin - pannello\n"
-        "/stato - diagnostica\n"
-        "/aggiungi - inserisci una lista\n"
-        "/liberi - liste non assegnate\n"
-        "/assegnazioni - storico consegne\n"
-        "/revoca - ritira un'assegnazione\n"
-        "/utenti - cerca un utente\n"
-        "/elenco - elenco utenti a pagine\n"
-        "/bannati - elenco utenti bannati\n"
-        "/ban - blocca un utente\n"
-        "/unban - sblocca un utente\n"
-        "/reset - azzera l'attesa\n"
-        "/admin_add - aggiungi amministratore\n"
-        "/admin_del - rimuovi amministratore\n"
-        "/cooldown - giorni di attesa\n"
-        "/setgroup - gruppo autorizzato\n"
-        "/setlink - link d'invito\n"
-        "/verifica - riverifica admin anonimo\n"
-        "/deverifica - revoca la verifica\n"
-        "/toggle - accendi o spegni\n"
-        "/esporta - esporta le liste libere\n"
-        "/log - file di log\n"
-        "/annulla - interrompi\n\n"
-        "Tutti accettano ID, @username o inoltro.",
-        reply_markup=kb.admin_menu())
+    await msg.answer(_comandi_text(), reply_markup=kb.nav("a:menu"))
 
 
 @admin_router.message(Command("verifica"))
@@ -894,13 +921,13 @@ async def cb_menu(cb: CallbackQuery, state: FSMContext):
 @admin_router.callback_query(F.data == "a:stats")
 async def cb_stats(cb: CallbackQuery):
     await cb.answer()
-    await _edit(cb.message, _quadro(await db.stats()), kb.admin_menu())
+    await _edit(cb.message, await _statistiche_text(), kb.nav("a:menu"))
 
 
 @admin_router.callback_query(F.data == "a:comandi")
-async def cb_comandi(cb: CallbackQuery, state: FSMContext):
+async def cb_comandi(cb: CallbackQuery):
     await cb.answer()
-    await comandi_cmd(cb.message, state)
+    await _edit(cb.message, _comandi_text(), kb.nav("a:menu"))
 
 
 @admin_router.callback_query(F.data == "a:reload")
