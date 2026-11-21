@@ -429,9 +429,9 @@ async def cb_comandi(cb: CallbackQuery, state: FSMContext):
 @admin_router.callback_query(F.data == "a:reload")
 async def cb_reload(cb: CallbackQuery, bot: Bot):
     await cb.answer("Ricarico")
+    from bot import avvisa_admin
     await avvisa_admin(bot, solo=cb.from_user.id)
-    await cb.message.edit_text("Bot ricaricato su tutti gli admin.\n\nPannello:", 
-                               reply_markup=kb.admin_menu())
+    await cb.message.edit_text("Bot ricaricato.\n\nPannello:", reply_markup=kb.admin_menu())
 
 
 @admin_router.callback_query(F.data == "a:users")
@@ -507,7 +507,7 @@ def _log_txt(righe):
     out = ["LOG ATTIVITA - LISTE PIAZZA ANDROID ITA", ""]
     for r in reversed(righe):
         quando = r["ts"].astimezone().strftime("%d/%m/%Y %H:%M")
-        chi = r["username"] and f"@{r['username']}" or (r["full_name"] or str(r["actor"]))
+        chi = f"@{r['username']}" if r["username"] else (r["full_name"] or str(r["actor"]))
         cosa = AZIONI.get(r["action"], r["action"])
         det = f" - {r['detail']}" if r["detail"] else ""
         out.append(f"{quando} | {chi} | {cosa}{det}")
@@ -516,7 +516,7 @@ def _log_txt(righe):
     return "\n".join(out)
 
 
-async def _manda_log(target, bot):
+async def _manda_log(target):
     righe = await db.all_logs()
     path = Path("/tmp/log_attivita.txt")
     path.write_text(_log_txt(righe), encoding="utf-8")
@@ -524,13 +524,13 @@ async def _manda_log(target, bot):
 
 
 @admin_router.message(Command("log"))
-async def log_cmd(msg: Message, bot: Bot):
-    await _manda_log(msg, bot)
+async def log_cmd(msg: Message):
+    await _manda_log(msg)
 
 
 @admin_router.callback_query(F.data == "a:log")
-async def cb_log(cb: CallbackQuery, bot: Bot):
-    await _manda_log(cb.message, bot)
+async def cb_log(cb: CallbackQuery):
+    await _manda_log(cb.message)
     await cb.answer()
 
 
@@ -657,8 +657,8 @@ async def add_s_mac(msg: Message, state: FSMContext):
     await _ask_confirm(msg, state, item)
 
 
-@admin_router.message(Add.m3u | Add.x_server | Add.x_user | Add.x_pass | Add.s_portal | Add.s_mac,
-                      F.photo)
+@admin_router.message(StateFilter(Add.m3u, Add.x_server, Add.x_user, Add.x_pass,
+                                  Add.s_portal, Add.s_mac), F.photo)
 async def add_foto_reject(msg: Message):
     await msg.answer("Qui accetto solo testo o copia-incolla.\n"
                      "Per una foto o un file usa /aggiungi e scegli «Aggiungi foto/txt».",
