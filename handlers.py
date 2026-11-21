@@ -379,22 +379,6 @@ async def _rispondi(cb):
         print(f"answer: {type(e).__name__}: {e}")
 
 
-def _pagina_da(data):
-    """Legge lu:p:<bersaglio>:<corrente>:<pagine> oppure lu:<bersaglio>."""
-    pezzi = (data or "").split(":")
-    if len(pezzi) >= 5 and pezzi[1] == "p":
-        try:
-            return int(pezzi[2]), int(pezzi[3]), int(pezzi[4])
-        except ValueError:
-            pass
-    if len(pezzi) >= 2:
-        try:
-            return int(pezzi[1]), None, None
-        except ValueError:
-            pass
-    return 0, None, None
-
-
 def _pagine(tot):
     return max(1, (tot + PER_PAGE - 1) // PER_PAGE)
 
@@ -411,14 +395,31 @@ def _taglio(righe, page):
     return page, pagine, fetta
 
 
+def _coppia(data):
+    """Legge a:u:<pagina>:<corrente> (o a:n:...) oppure lu:<pagina>."""
+    pezzi = (data or "").split(":")
+    if len(pezzi) >= 4 and pezzi[1] in ("u", "n"):
+        try:
+            return int(pezzi[2]), int(pezzi[3])
+        except ValueError:
+            pass
+    if len(pezzi) >= 2:
+        try:
+            return int(pezzi[1]), None
+        except ValueError:
+            pass
+    return 0, None
+
+
 def _nav_pagine(prefisso, page, pagine):
+    """prefisso e' a:u (utenti) oppure a:n (bannati)."""
     return [
         InlineKeyboardButton(text="◀️",
-                             callback_data=f"{prefisso}:p:{max(0, page - 1)}:{page}:{pagine}"),
+                             callback_data=f"{prefisso}:{max(0, page - 1)}:{page}"),
         InlineKeyboardButton(text=f"pag. {page + 1}/{pagine}",
-                             callback_data=f"{prefisso}:p:{page}:{page}:{pagine}"),
+                             callback_data=f"{prefisso}:{page}:{page}"),
         InlineKeyboardButton(text="▶️",
-                             callback_data=f"{prefisso}:p:{min(pagine - 1, page + 1)}:{page}:{pagine}"),
+                             callback_data=f"{prefisso}:{min(pagine - 1, page + 1)}:{page}"),
     ]
 
 
@@ -426,7 +427,7 @@ def _numeri_pagina(prefisso, page, pagine):
     if pagine < 2 or pagine > 6:
         return None
     return [InlineKeyboardButton(text=("•" if n == page else str(n + 1)),
-                                 callback_data=f"{prefisso}:p:{n}:{page}:{pagine}")
+                                 callback_data=f"{prefisso}:{n}:{page}")
             for n in range(pagine)]
 
 
@@ -458,10 +459,10 @@ async def _mostra_utenti(msg, page, edit=True, cb=None, nota=""):
                                      callback_data=f"lb:{'unban' if bannato else 'ban'}:"
                                                    f"{r['user_id']}:{page}"),
             ])
-        numeri = _numeri_pagina("lu", page, pagine)
+        numeri = _numeri_pagina("a:u", page, pagine)
         if numeri:
             tastiera.append(numeri)
-        tastiera.append(_nav_pagine("lu", page, pagine))
+        tastiera.append(_nav_pagine("a:u", page, pagine))
         tastiera += _coda_pagina()
         coda = "" if pagine > 1 else "\nUnica pagina."
         testo = (f"👤 Utenti normali: {tot} — pagina {page + 1} di {pagine}{coda}\n"
@@ -493,10 +494,10 @@ async def _mostra_bannati(msg, page, edit=True, cb=None, nota=""):
                                      callback_data=f"lb:unban:{r['user_id']}:{page}"),
             ])
             tastiera.append([InlineKeyboardButton(text=f"↳ {motivo}", callback_data="a:noop")])
-        numeri = _numeri_pagina("lp", page, pagine)
+        numeri = _numeri_pagina("a:n", page, pagine)
         if numeri:
             tastiera.append(numeri)
-        tastiera.append(_nav_pagine("lp", page, pagine))
+        tastiera.append(_nav_pagine("a:n", page, pagine))
         tastiera += _coda_pagina()
         coda = "" if pagine > 1 else "\nUnica pagina."
         errore = await _invia_o_modifica(
@@ -535,11 +536,18 @@ async def cb_allusers(cb: CallbackQuery):
     await _apri_utenti(cb, 0)
 
 
+@page_router.callback_query(F.data.startswith("a:u:"))
+@admin_router.callback_query(F.data.startswith("a:u:"))
+async def cb_utenti_pagina(cb: CallbackQuery):
+    pagina, corrente = _coppia(cb.data)
+    await _apri_utenti(cb, pagina, corrente)
+
+
 @page_router.callback_query(F.data.startswith("lu"))
 @admin_router.callback_query(F.data.startswith("lu"))
-async def cb_utenti_pagina(cb: CallbackQuery):
-    bersaglio, corrente, _ = _pagina_da(cb.data)
-    await _apri_utenti(cb, bersaglio, corrente)
+async def cb_utenti_vecchio(cb: CallbackQuery):
+    pagina, corrente = _coppia(cb.data)
+    await _apri_utenti(cb, pagina, corrente)
 
 
 @page_router.callback_query(F.data == "a:banned")
@@ -548,11 +556,18 @@ async def cb_banned(cb: CallbackQuery):
     await _apri_bannati(cb, 0)
 
 
+@page_router.callback_query(F.data.startswith("a:n:"))
+@admin_router.callback_query(F.data.startswith("a:n:"))
+async def cb_bannati_pagina(cb: CallbackQuery):
+    pagina, corrente = _coppia(cb.data)
+    await _apri_bannati(cb, pagina, corrente)
+
+
 @page_router.callback_query(F.data.startswith("lp"))
 @admin_router.callback_query(F.data.startswith("lp"))
-async def cb_bannati_pagina(cb: CallbackQuery):
-    bersaglio, corrente, _ = _pagina_da(cb.data)
-    await _apri_bannati(cb, bersaglio, corrente)
+async def cb_bannati_vecchio(cb: CallbackQuery):
+    pagina, corrente = _coppia(cb.data)
+    await _apri_bannati(cb, pagina, corrente)
 
 
 @page_router.callback_query(F.data.startswith("lb:"))
