@@ -37,6 +37,8 @@ MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 
 HINT = "\n\nScrivi /annulla per interrompere."
 
+MAX_ANTEPRIMA = 15
+
 
 class Add(StatesGroup):
     m3u = State()
@@ -80,6 +82,22 @@ def _quadro(s):
             f"📋 Libere: {s['free']} · 📤 Assegnate: {s['assigned']}\n"
             f"👤 Utenti: {s['users']} · 🛡 Admin: {s['admins']} · 👑 Proprietario: {s['super']}\n"
             f"🚫 Bannati: {s['banned']}")
+
+
+async def _torna_menu(target, testo, edit=True):
+    kbd = kb.admin_menu()
+    try:
+        if edit and isinstance(target, Message):
+            await target.edit_text(testo, reply_markup=kbd)
+        elif isinstance(target, Message):
+            await target.answer(testo, reply_markup=kbd)
+        else:
+            await target.answer(testo, reply_markup=kbd)
+    except Exception:
+        try:
+            await target.answer(testo, reply_markup=kbd)
+        except Exception:
+            pass
 
 
 def _payload_text(kind, p):
@@ -417,12 +435,12 @@ async def panel(msg: Message, state: FSMContext):
 @admin_router.message(Command("stato"))
 async def stato_cmd(msg: Message, bot: Bot, state: FSMContext):
     await state.clear()
-    await msg.answer(await _stato_text(msg, bot), reply_markup=kb.back())
+    await msg.answer(await _stato_text(msg, bot), reply_markup=kb.admin_menu())
 
 
 @admin_router.callback_query(F.data == "a:stato")
 async def cb_stato(cb: CallbackQuery, bot: Bot):
-    await cb.message.answer(await _stato_text(cb.message, bot), reply_markup=kb.back())
+    await cb.message.answer(await _stato_text(cb.message, bot), reply_markup=kb.admin_menu())
     await cb.answer()
 
 
@@ -453,7 +471,7 @@ async def comandi_cmd(msg: Message, state: FSMContext):
         "/log - file di log\n"
         "/annulla - interrompi\n\n"
         "Tutti accettano ID, @username o inoltro.",
-        reply_markup=kb.back())
+        reply_markup=kb.admin_menu())
 
 
 @admin_router.message(Command("verifica"))
@@ -464,7 +482,7 @@ async def verifica_cmd(msg: Message, bot: Bot):
 @admin_router.message(Command("deverifica"))
 async def deverifica_cmd(msg: Message):
     await db.clear_anon_verified(msg.chat.id)
-    await msg.answer("Verifica revocata per questa chat.", reply_markup=kb.back())
+    await msg.answer("Verifica revocata per questa chat.", reply_markup=kb.admin_menu())
 
 
 @admin_router.callback_query(F.data == "a:verify")
@@ -475,6 +493,7 @@ async def cb_verify(cb: CallbackQuery, bot: Bot):
 
 @admin_router.callback_query(F.data == "a:menu")
 async def cb_menu(cb: CallbackQuery, state: FSMContext):
+    _pulisci(cb.from_user.id)
     await state.clear()
     await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.admin_menu())
     await cb.answer()
@@ -482,7 +501,7 @@ async def cb_menu(cb: CallbackQuery, state: FSMContext):
 
 @admin_router.callback_query(F.data == "a:stats")
 async def cb_stats(cb: CallbackQuery):
-    await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.back())
+    await cb.message.edit_text(_quadro(await db.stats()), reply_markup=kb.admin_menu())
     await cb.answer()
 
 
@@ -639,11 +658,10 @@ async def add_cancel(cb: CallbackQuery, state: FSMContext):
     _pulisci(cb.from_user.id)
     await state.clear()
     try:
-        await cb.message.edit_text("Annullato, niente salvato.\n\nPer ricominciare: /aggiungi.",
-                                   reply_markup=kb.back())
+        await cb.message.edit_text(_quadro(await db.stats()),
+                                   reply_markup=kb.admin_menu())
     except Exception:
-        await cb.message.answer("Annullato, niente salvato.\n\nPer ricominciare: /aggiungi.",
-                                reply_markup=kb.back())
+        await cb.message.answer("Annullato.", reply_markup=kb.admin_menu())
 
 
 @admin_router.callback_query(F.data.startswith("a:k:"))
@@ -701,8 +719,10 @@ async def _mostra_multiplo(target, state: FSMContext, kind, items):
     MULTI[cid] = {"items": items, "kind": kind, "uid": target.from_user.id}
     await state.update_data(kind=kind)
     await state.set_state(Add.confirm)
-    righe = "\n\n".join(_bulk_line(n, it) for n, it in enumerate(items, 1))
-    testo = (f"Ho riconosciuto <b>{len(items)}</b> liste separate:\n\n{righe}\n\n"
+    mostra = items[:MAX_ANTEPRIMA]
+    righe = "\n\n".join(_bulk_line(n, it) for n, it in enumerate(mostra, 1))
+    extra = f"\n\n… e altre {len(items) - MAX_ANTEPRIMA}" if len(items) > MAX_ANTEPRIMA else ""
+    testo = (f"Ho riconosciuto <b>{len(items)}</b> liste separate:\n\n{righe}{extra}\n\n"
              f"Sono corrette? Se confermi le salvo tutte, altrimenti rimandamele.")
     if isinstance(target, CallbackQuery):
         await target.message.edit_text(testo, reply_markup=kb.multiplo(cid))
@@ -870,7 +890,8 @@ async def add_confirm(cb: CallbackQuery, state: FSMContext):
         await db.set_test(lid, True, res.note)
         await db.log(cb.from_user.id, "add", f"{lid} {item['kind']}")
         return await cb.message.edit_text(
-            f"Salvata - lista #{lid} ({item['kind']}).\nTest superato.", reply_markup=kb.back())
+            f"Salvata - lista #{lid} ({item['kind']}).\nTest superato.",
+            reply_markup=kb.admin_menu())
     await cb.message.edit_text(
         f"Test <b>non superato</b>: {res.note}\n\n{preview(item)}\n\n"
         f"Vuoi inserirla ugualmente?", reply_markup=kb.force(cid))
@@ -888,7 +909,7 @@ async def add_force(cb: CallbackQuery):
     await db.set_test(lid, False, "inserita senza test superato")
     await db.log(cb.from_user.id, "add", f"{lid} {item['kind']} forzata")
     await cb.message.edit_text(f"Salvata ugualmente - lista #{lid} ({item['kind']}).",
-                               reply_markup=kb.back())
+                               reply_markup=kb.admin_menu())
     await cb.answer()
 
 
@@ -902,7 +923,7 @@ def _bulk_line(n, it):
                 f"<code>{p['server']}</code>")
     if it["kind"] == "stalker":
         return f"{n}. <b>ST</b> <code>{p['mac']}</code> · <code>{p['portal']}</code>"
-    return f"{n}. <b>M3U</b> <code>{p['url'][:80]}</code>"
+    return f"{n}. <b>M3U</b>\n<code>{p['url']}</code>"
 
 
 BULK_PER_PAGE = 10
@@ -1082,11 +1103,15 @@ async def _bulk_test(msg, ids):
                 await msg.edit_text(f"Test {n}/{len(ids)} — superati {ok}, falliti {ko}")
             except Exception:
                 pass
+    fine = (f"Test finito: {ok} superati, {ko} non superati su {len(ids)}.\n"
+            f"Restano tutte in uso.")
     try:
-        await msg.edit_text(f"Test finito: {ok} superati, {ko} non superati su {len(ids)}.\n"
-                            f"Restano tutte in uso.")
+        await msg.edit_text(fine, reply_markup=kb.admin_menu())
     except Exception:
-        pass
+        try:
+            await msg.answer(fine, reply_markup=kb.admin_menu())
+        except Exception:
+            pass
 
 
 @admin_router.callback_query(F.data.startswith("a:bok:"))
@@ -1115,7 +1140,7 @@ async def bulk_confirm(cb: CallbackQuery, state: FSMContext):
 async def cancel_cmd(msg: Message, state: FSMContext):
     _pulisci(msg.from_user.id)
     await state.clear()
-    await msg.answer("Operazione annullata.")
+    await msg.answer("Operazione annullata.", reply_markup=kb.admin_menu())
 
 
 # ==================== LISTE E STORICO ====================
@@ -1125,9 +1150,9 @@ async def free_cmd(msg: Message, state: FSMContext):
     rows = await db.free_lists()
     if not rows:
         return await msg.answer("Nessuna lista libera. Inseriscine una con /aggiungi.",
-                                reply_markup=kb.back())
+                                reply_markup=kb.admin_menu())
     txt = "\n".join(f"#{r['id']} - {r['kind']} - {r['label'] or '-'}" for r in rows)
-    await msg.answer(f"Liste libere:\n\n{txt}", reply_markup=kb.back())
+    await msg.answer(f"Liste libere:\n\n{txt}", reply_markup=kb.admin_menu())
 
 
 @admin_router.callback_query(F.data == "a:free")
@@ -1140,7 +1165,8 @@ async def _show_free(cb, kind, page):
     per_page = 5
     tot = await db.count_free_kind(kind)
     if not tot:
-        await cb.message.edit_text("Nessuna lista libera di questo tipo.", reply_markup=kb.back())
+        await cb.message.edit_text("Nessuna lista libera di questo tipo.",
+                                   reply_markup=kb.admin_menu())
         return
     inizio = page * per_page
     righe = await db.free_lists_kind(kind, inizio, per_page)
@@ -1222,8 +1248,9 @@ async def cb_del_selected(cb: CallbackQuery):
             fatte += 1
     DSEL[cb.from_user.id] = set()
     await db.log(cb.from_user.id, "del_lists", str(fatte))
-    await _show_free(cb, None if kind == "all" else kind, int(page))
     await cb.answer(f"Eliminate {fatte}")
+    await cb.message.edit_text(f"🗑 Eliminate {fatte} liste.\n\nPannello:",
+                               reply_markup=kb.admin_menu())
 
 
 @admin_router.message(Command("assegnazioni"))
@@ -1241,7 +1268,7 @@ async def cb_hist(cb: CallbackQuery):
 async def _hist(target):
     rows = await db.assignments()
     if not rows:
-        return await target.answer("Nessuna assegnazione registrata.", reply_markup=kb.back())
+        return await target.answer("Nessuna assegnazione registrata.", reply_markup=kb.admin_menu())
     lines = []
     for r in rows:
         who = f"@{r['username']}" if r["username"] else str(r["user_id"])
@@ -1250,7 +1277,7 @@ async def _hist(target):
                      f"{'revocata' if r['revoked'] else 'attiva'}")
     buttons = [[InlineKeyboardButton(text=f"Revoca #{r['id']}", callback_data=f"a:rev:{r['id']}")]
                for r in rows[:10]]
-    buttons.append([InlineKeyboardButton(text="Indietro", callback_data="a:menu")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Menu", callback_data="a:menu")])
     await target.answer("Ultime assegnazioni:\n\n" + "\n".join(lines),
                         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
@@ -1271,7 +1298,7 @@ async def revoca_cmd(msg: Message, state: FSMContext):
     if len(p) > 1:
         row = await db.revoke(int(p[1])) if p[1].isdigit() else None
         return await msg.answer("Revocata." if row else "ID assegnazione non valido.",
-                                reply_markup=kb.back())
+                                reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
     await msg.answer("Quale assegnazione vuoi revocare? Mandami il numero "
@@ -1293,7 +1320,7 @@ async def users_cmd(msg: Message, state: FSMContext):
 async def _show_users(msg, q):
     rows = await db.find_users(q)
     if not rows:
-        return await msg.answer("Nessun utente trovato.", reply_markup=kb.back())
+        return await msg.answer("Nessun utente trovato.", reply_markup=kb.admin_menu())
     for r in rows:
         await msg.answer(f"{r['full_name'] or '-'} @{r['username'] or '-'} - <code>{r['user_id']}</code>\n"
                          f"bannato: {'si' if r['banned'] else 'no'} - prossima: {r['next_available'] or '-'}")
@@ -1332,7 +1359,7 @@ async def ban_cmd(msg: Message, state: FSMContext):
         await db.ensure_user(uid)
         await db.ban(uid, p[2] if len(p) > 2 else "deciso da admin")
         await db.log(msg.from_user.id, "ban", str(uid))
-        return await msg.answer(f"Utente {uid} bannato.", reply_markup=kb.back())
+        return await msg.answer(f"Utente {uid} bannato.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="ban")
     await msg.answer("Chi vuoi bannare? Mandami ID, @username o inoltra un suo messaggio." + HINT)
@@ -1347,7 +1374,7 @@ async def unban_cmd(msg: Message, state: FSMContext):
         if not uid:
             return await _need_target(msg)
         await db.unban(uid)
-        return await msg.answer(f"Utente {uid} sbloccato.", reply_markup=kb.back())
+        return await msg.answer(f"Utente {uid} sbloccato.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="unban")
     await msg.answer("Chi vuoi sbloccare? Mandami ID, @username o inoltra un suo messaggio." + HINT)
@@ -1362,7 +1389,7 @@ async def reset_cmd(msg: Message, state: FSMContext):
         if not uid:
             return await _need_target(msg)
         await db.clear_next(uid)
-        return await msg.answer(f"Attesa azzerata per {uid}.", reply_markup=kb.back())
+        return await msg.answer(f"Attesa azzerata per {uid}.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="reset")
     await msg.answer("A chi vuoi azzerare l'attesa? Mandami ID, @username "
@@ -1376,14 +1403,14 @@ async def _add_by(msg, raw):
     if uid:
         await db.add_admin(uid, nome or None, msg.from_user.id)
         await db.log(msg.from_user.id, "admin_add", str(uid))
-        return await msg.answer(f"{uid} ora è amministratore.", reply_markup=kb.back())
+        return await msg.answer(f"{uid} ora è amministratore.", reply_markup=kb.admin_menu())
     if not nome or " " in nome:
         return await _need_target(msg)
     await db.add_admin_name(nome, msg.from_user.id)
     await db.log(msg.from_user.id, "admin_add_name", nome)
     await msg.answer(f"@{nome} ora è amministratore, senza bisogno di ID.\n\n"
                      f"Funziona appena scrive al bot o nel gruppo. "
-                     f"Se cambia username va riaggiunto.", reply_markup=kb.back())
+                     f"Se cambia username va riaggiunto.", reply_markup=kb.admin_menu())
 
 
 async def _del_by(msg, raw):
@@ -1400,7 +1427,7 @@ async def _del_by(msg, raw):
     if not fatto:
         return await _need_target(msg)
     await db.log(msg.from_user.id, "admin_del", str(uid or nome))
-    await msg.answer(f"{uid or '@' + nome} non è più amministratore.", reply_markup=kb.back())
+    await msg.answer(f"{uid or '@' + nome} non è più amministratore.", reply_markup=kb.admin_menu())
 
 
 @admin_router.message(Command("admin_add"))
@@ -1440,7 +1467,7 @@ async def _show_users_page(cb, page):
     tot = await db.count_users(config.SUPER_ADMINS)
     righe = await db.all_users(page * PER_PAGE, PER_PAGE, config.SUPER_ADMINS)
     if not tot:
-        await cb.message.edit_text("Nessun utente normale registrato.", reply_markup=kb.back())
+        await cb.message.edit_text("Nessun utente normale registrato.", reply_markup=kb.admin_menu())
         return
     tastiera = []
     for r in righe:
@@ -1492,7 +1519,7 @@ async def _show_banned_page(cb, page):
     tot = await db.count_banned()
     righe = await db.banned_users(page * PER_PAGE, PER_PAGE)
     if not tot:
-        await cb.message.edit_text("Nessun utente bannato.", reply_markup=kb.back())
+        await cb.message.edit_text("Nessun utente bannato.", reply_markup=kb.admin_menu())
         return
     tastiera = []
     for r in righe:
@@ -1586,7 +1613,7 @@ async def cooldown_cmd(msg: Message, state: FSMContext):
         if not p[1].isdigit():
             return await msg.answer("Serve un numero di giorni, per esempio /cooldown 7")
         await db.set_setting("cooldown_days", p[1])
-        return await msg.answer(f"Attesa impostata a {p[1]} giorni.", reply_markup=kb.back())
+        return await msg.answer(f"Attesa impostata a {p[1]} giorni.", reply_markup=kb.admin_menu())
     attuale = await db.get_int("cooldown_days")
     await state.set_state(Ask.wait)
     await state.update_data(action="cooldown")
@@ -1601,11 +1628,12 @@ async def setgroup_cmd(msg: Message, state: FSMContext):
     if len(p) > 1:
         gid = p[1].strip()
         await db.set_setting("group_id", gid)
-        return await msg.answer(f"Gruppo impostato: <code>{gid}</code>", reply_markup=kb.back())
+        return await msg.answer(f"Gruppo impostato: <code>{gid}</code>", reply_markup=kb.admin_menu())
     if msg.chat.type != "private":
         await db.set_setting("group_id", str(msg.chat.id))
         return await msg.answer(f"Gruppo impostato: <code>{msg.chat.id}</code>\n"
-                                f"Ora solo i membri possono usare il bot.")
+                                f"Ora solo i membri possono usare il bot.",
+                                reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="setgroup")
     await msg.answer("Mandami l'ID del gruppo (inizia con -100). In alternativa scrivi "
@@ -1618,7 +1646,7 @@ async def setlink_cmd(msg: Message, state: FSMContext):
     p = msg.text.split(maxsplit=1)
     if len(p) > 1:
         await db.set_setting("group_link", p[1].strip())
-        return await msg.answer("Link salvato.", reply_markup=kb.back())
+        return await msg.answer("Link salvato.", reply_markup=kb.admin_menu())
     await state.set_state(Ask.wait)
     await state.update_data(action="setlink")
     await msg.answer("Mandami il link d'invito del gruppo (https://t.me/+...)." + HINT)
@@ -1630,7 +1658,7 @@ async def toggle_cmd(msg: Message, state: FSMContext):
     cur = await db.get_int("enabled")
     await db.set_setting("enabled", "0" if cur else "1")
     await msg.answer("Bot spento. Nessuno riceverà liste." if cur else "Bot attivo.",
-                     reply_markup=kb.back())
+                     reply_markup=kb.admin_menu())
 
 
 async def _settings_kb():
@@ -1721,21 +1749,21 @@ async def s_ntext(cb: CallbackQuery, state: FSMContext):
 async def set_wel(msg: Message, state: FSMContext):
     await db.set_setting("welcome", msg.html_text)
     await state.clear()
-    await msg.answer("Testo di benvenuto aggiornato.", reply_markup=kb.back())
+    await msg.answer("Testo di benvenuto aggiornato.", reply_markup=kb.admin_menu())
 
 
 @admin_router.message(SetTxt.deny)
 async def set_deny(msg: Message, state: FSMContext):
     await db.set_setting("deny_text", msg.html_text)
     await state.clear()
-    await msg.answer("Testo di rifiuto aggiornato.", reply_markup=kb.back())
+    await msg.answer("Testo di rifiuto aggiornato.", reply_markup=kb.admin_menu())
 
 
 @admin_router.message(SetTxt.not_member)
 async def set_ntext(msg: Message, state: FSMContext):
     await db.set_setting("not_member", msg.html_text)
     await state.clear()
-    await msg.answer("Testo di blocco aggiornato.", reply_markup=kb.back())
+    await msg.answer("Testo di blocco aggiornato.", reply_markup=kb.admin_menu())
 
 
 # ==================== ESPORTA ====================
@@ -1744,10 +1772,10 @@ async def export_cmd(msg: Message, state: FSMContext):
     await state.clear()
     data = await db.all_free_payloads()
     if not data:
-        return await msg.answer("Nessuna lista libera da esportare.", reply_markup=kb.back())
+        return await msg.answer("Nessuna lista libera da esportare.", reply_markup=kb.admin_menu())
     path = Path("/tmp/export.json")
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    await msg.answer_document(FSInputFile(path))
+    await msg.answer_document(FSInputFile(path), reply_markup=kb.admin_menu())
 
 
 @admin_router.callback_query(F.data == "a:exp")
@@ -1782,19 +1810,21 @@ async def ask_input(msg: Message, state: FSMContext):
             return await msg.answer("Serve un numero. Riprova o scrivi /annulla.")
         await db.set_setting("cooldown_days", raw.strip())
         await state.clear()
-        return await msg.answer(f"Attesa impostata a {raw.strip()} giorni.", reply_markup=kb.back())
+        return await msg.answer(f"Attesa impostata a {raw.strip()} giorni.",
+                                reply_markup=kb.admin_menu())
 
     if action == "setlink":
         if not raw.strip().startswith("http"):
             return await msg.answer("Serve un link che inizi con http. Riprova o scrivi /annulla.")
         await db.set_setting("group_link", raw.strip())
         await state.clear()
-        return await msg.answer("Link salvato.", reply_markup=kb.back())
+        return await msg.answer("Link salvato.", reply_markup=kb.admin_menu())
 
     if action == "setgroup":
         await db.set_setting("group_id", raw.strip())
         await state.clear()
-        return await msg.answer(f"Gruppo impostato: <code>{raw.strip()}</code>", reply_markup=kb.back())
+        return await msg.answer(f"Gruppo impostato: <code>{raw.strip()}</code>",
+                                reply_markup=kb.admin_menu())
 
     if action == "utenti":
         await state.clear()
@@ -1806,7 +1836,7 @@ async def ask_input(msg: Message, state: FSMContext):
         row = await db.revoke(int(raw.strip()))
         await state.clear()
         return await msg.answer("Assegnazione revocata." if row else "Assegnazione non trovata.",
-                                reply_markup=kb.back())
+                                reply_markup=kb.admin_menu())
 
     if action == "admin_add":
         await state.clear()
@@ -1833,10 +1863,10 @@ async def ask_input(msg: Message, state: FSMContext):
         testo = f"Attesa azzerata per {uid}."
     else:
         await state.clear()
-        return await msg.answer("Azione sconosciuta, riprova.")
+        return await msg.answer("Azione sconosciuta, riprova.", reply_markup=kb.admin_menu())
 
     await state.clear()
-    await msg.answer(testo, reply_markup=kb.back())
+    await msg.answer(testo, reply_markup=kb.admin_menu())
 
 
 # ==================== PARACADUTE ====================
