@@ -52,16 +52,39 @@ DEFAULTS = {
     "group_link": "",
     "thanks_min": "10",
     "warn_cmd": "/warn {user}",
-    "ph_consegna": "Ecco la tua lista, {name}. Se funziona come deve, fammelo sapere nel gruppo: è la nostra unica prova che il lavoro è buono. 🎬",
-    "ph_richiesta": "⏱ <b>Hai {minuti} minuti</b> per ringraziare nel gruppo: manda lo <b>screenshot</b> della lista che funziona e una frase di ringraziamento, taggando {bot}.\n\nSe non lo fai in tempo, parto con un avviso automatico agli admin.",
-    "ph_ok": "🙏 Grazie {name}, ringraziamento registrato. Così si fa.",
-    "ph_ko": "⏱ Non ho visto il tuo ringraziamento nel gruppo, {name}. Manda lo screenshot e un grazie taggando {bot}, così gli admin sanno che la lista va bene.",
-    "not_member": "Per usare questo bot devi essere membro del gruppo ufficiale. Entra nel gruppo, poi riprova con /start.",
-    "welcome": "Ciao {name}!\n\nPremi il pulsante per ricevere una lista IPTV. Una lista ogni {days} giorni.",
-    "deny_text": "Hai gia ricevuto una lista. Potrai richiederne un'altra <b>{when}</b> (tra {left}).",
-    "no_lists": "Al momento non ci sono liste disponibili. Riprova piu tardi.",
-    "broken_all": "Nessuna lista ha superato il test. Avvisa un admin.",
+    "welcome": ("👋 Ciao {name}!\n\n"
+                "Benvenuto nel canale liste. 🎬\n"
+                "Premi il pulsante qui sotto per ricevere la tua lista IPTV: "
+                "una ogni {days} giorni.\n\n"
+                "🍿 Buona visione!"),
+    "ph_consegna": ("🎁 <b>Ecco la tua lista, {name}!</b>\n"
+                    "Se funziona come deve, fammelo sapere nel gruppo: "
+                    "è l'unica prova che il lavoro è buono. 💪\n\n"
+                    "🍿 Buona visione!"),
+    "ph_richiesta": ("⏱ <b>{minuti} minuti di tempo</b>, {name}!\n\n"
+                     "📸 Manda nel gruppo lo <b>screenshot</b> della lista che funziona "
+                     "e un grazie, taggando {bot}.\n\n"
+                     "🏆 Così gli admin sanno che la lista è valida e tu resti in regola.\n"
+                     "❗ Se non lo fai in tempo, parte un avviso automatico."),
+    "ph_ok": ("🙏 <b>Grazie {name}!</b>\n"
+              "Ringraziamento registrato, sei un grande. ⭐"),
+    "ph_ko": ("⏰ {name}, non ho visto il tuo ringraziamento nel gruppo.\n\n"
+              "📸 Manda lo screenshot e un grazie taggando {bot}, così sistemi tutto. 🙏"),
+    "deny_text": ("⏳ Hai già ricevuto una lista, {name}.\n"
+                  "Potrai chiederne un'altra <b>{when}</b> (tra {left}). 🍿"),
+    "not_member": ("⛔ Per usare il bot devi essere nel gruppo ufficiale.\n\n"
+                   "👉 Entra qui: {link}\n"
+                   "Poi riprova con /start. 🚀"),
+    "no_lists": ("📭 Al momento non ci sono liste disponibili, {name}.\n"
+                 "Riprova più tardi, sto rifornendo. ⏳"),
+    "broken_all": ("🛠 Nessuna lista ha superato il test, {name}.\n"
+                   "Avvisa un admin, ci stiamo lavorando. 🔧"),
 }
+
+FRASI_CHIAVI = ["welcome", "ph_consegna", "ph_richiesta", "ph_ok", "ph_ko",
+                "deny_text", "not_member", "no_lists", "broken_all"]
+
+PHRASE_VER = "2"
 
 _pool = None
 
@@ -81,6 +104,14 @@ async def init():
         for k, v in DEFAULTS.items():
             await c.execute("INSERT INTO settings(key,value) VALUES($1,$2) "
                             "ON CONFLICT(key) DO NOTHING", k, v)
+        versione = await c.fetchval("SELECT value FROM settings WHERE key='ph_ver'")
+        if (versione or "") != PHRASE_VER:
+            for k in FRASI_CHIAVI:
+                await c.execute("INSERT INTO settings(key,value) VALUES($1,$2) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                k, DEFAULTS[k])
+            await c.execute("INSERT INTO settings(key,value) VALUES('ph_ver',$1) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", PHRASE_VER)
 
 
 async def close():
