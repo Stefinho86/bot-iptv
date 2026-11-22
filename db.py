@@ -53,7 +53,7 @@ DEFAULTS = {
     "thanks_min": "10",
     "warn_cmd": "/warn {user}",
     "joke_on": "1",
-    "joke_api": "https://italian-jokes.vercel.app/api/jokes",
+    "joke_api": "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json",
     "joke_testo": ("Coglionazzo! 😂❤️\n"
                    "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
     "welcome": ("👋 Ciao {name}!\n\n"
@@ -109,6 +109,10 @@ FRASI_CHIAVI = list(VECCHIE_FRASI)
 
 PHRASE_VER = "3"
 
+VECCHIA_API = "https://italian-jokes.vercel.app/api/jokes"
+
+NUOVA_API = "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json"
+
 _pool = None
 
 
@@ -134,6 +138,8 @@ async def init():
                                 k, DEFAULTS[k], VECCHIE_FRASI[k])
             await c.execute("INSERT INTO settings(key,value) VALUES('ph_ver',$1) "
                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", PHRASE_VER)
+        await c.execute("UPDATE settings SET value=$2 WHERE key='joke_api' "
+                        "AND (value='' OR value=$1)", VECCHIA_API, NUOVA_API)
 
 
 async def close():
