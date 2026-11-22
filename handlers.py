@@ -810,7 +810,11 @@ async def cb_man(cb: CallbackQuery):
 
 @admin_router.callback_query(F.data.startswith("a:man:"))
 async def cb_man_pagina(cb: CallbackQuery):
-    pagina, _corrente = _coppia(cb.data)
+    pezzi = (cb.data or "").split(":")
+    try:
+        pagina = int(pezzi[2])
+    except (IndexError, ValueError):
+        pagina = 0
     await _man_utenti(cb, pagina)
 
 
@@ -832,12 +836,14 @@ async def _man_utenti(cb, page):
             bottoni.append([InlineKeyboardButton(
                 text=f"{nome} · {utente} · {r['tot']}",
                 callback_data=f"a:manu:{r['user_id']}:{page}")])
-        nav = [InlineKeyboardButton(text="◀️",
-                                    callback_data=f"a:man:{max(0, page - 1)}:{page}"),
-               InlineKeyboardButton(text=f"pag. {page + 1}/{pagine}", callback_data="a:noop"),
-               InlineKeyboardButton(text="▶️",
-                                    callback_data=f"a:man:{min(pagine - 1, page + 1)}:{page}")]
-        bottoni.append(nav)
+        sinistra = f"a:man:{page - 1}:{page}" if page > 0 else "a:noop"
+        destra = f"a:man:{page + 1}:{page}" if page + 1 < pagine else "a:noop"
+        bottoni.append([
+            InlineKeyboardButton(text="◀️" if page > 0 else "·", callback_data=sinistra),
+            InlineKeyboardButton(text=f"pag. {page + 1}/{pagine}", callback_data="a:noop"),
+            InlineKeyboardButton(text="▶️" if page + 1 < pagine else "·",
+                                 callback_data=destra),
+        ])
         bottoni.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
         bottoni.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
         await cb.answer()
