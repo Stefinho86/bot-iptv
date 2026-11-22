@@ -1,3 +1,4 @@
+# db.py
 import datetime as dt
 import json
 
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS lists(
 
 CREATE TABLE IF NOT EXISTS assignments(
   id SERIAL PRIMARY KEY, list_id INTEGER NOT NULL, user_id BIGINT NOT NULL,
-  assigned_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, revoked BOOLEAN NOT NULL DEFAULT FALSE);
+  assigned_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ, revoked BOOLEAN NOT NULL DEFAULT FALSE,
+  thanks_deadline TIMESTAMPTZ, thanked_at TIMESTAMPTZ);
 
 CREATE TABLE IF NOT EXISTS anon_verified(
   chat_id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, verified_at TIMESTAMPTZ NOT NULL);
@@ -48,6 +50,12 @@ DEFAULTS = {
     "group_id": "0",
     "group_only": "1",
     "group_link": "",
+    "thanks_min": "10",
+    "warn_cmd": "/warn {user}",
+    "ph_consegna": "Ecco la tua lista, {name}. Se funziona come deve, fammelo sapere nel gruppo: è la nostra unica prova che il lavoro è buono. 🎬",
+    "ph_richiesta": "⏱ <b>Hai {minuti} minuti</b> per ringraziare nel gruppo: manda lo <b>screenshot</b> della lista che funziona e una frase di ringraziamento, taggando {bot}.\n\nSe non lo fai in tempo, parto con un avviso automatico agli admin.",
+    "ph_ok": "🙏 Grazie {name}, ringraziamento registrato. Così si fa.",
+    "ph_ko": "⏱ Non ho visto il tuo ringraziamento nel gruppo, {name}. Manda lo screenshot e un grazie taggando {bot}, così gli admin sanno che la lista va bene.",
     "not_member": "Per usare questo bot devi essere membro del gruppo ufficiale. Entra nel gruppo, poi riprova con /start.",
     "welcome": "Ciao {name}!\n\nPremi il pulsante per ricevere una lista IPTV. Una lista ogni {days} giorni.",
     "deny_text": "Hai gia ricevuto una lista. Potrai richiederne un'altra <b>{when}</b> (tra {left}).",
@@ -68,6 +76,8 @@ async def init():
                                       ssl=False, command_timeout=30)
     async with _pool.acquire() as c:
         await c.execute(SCHEMA)
+        await c.execute("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS thanks_deadline TIMESTAMPTZ")
+        await c.execute("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS thanked_at TIMESTAMPTZ")
         for k, v in DEFAULTS.items():
             await c.execute("INSERT INTO settings(key,value) VALUES($1,$2) "
                             "ON CONFLICT(key) DO NOTHING", k, v)
@@ -302,12 +312,36 @@ async def payload_of(row):
     return json.loads(row["payload"])
 
 
-async def assign(lid, uid, expires_at):
+async def assign(lid, uid, expires_at, thanks_deadline=None):
     async with _pool.acquire() as c:
         await c.execute("UPDATE lists SET status='assigned' WHERE id=$1", lid)
         return await c.fetchval(
-            "INSERT INTO assignments(list_id,user_id,assigned_at,expires_at) VALUES($1,$2,$3,$4) RETURNING id",
-            lid, uid, now(), expires_at)
+            "INSERT INTO assignments(list_id,user_id,assigned_at,expires_at,thanks_deadline) "
+            "VALUES($1,$2,$3,$4,$5) RETURNING id",
+            lid, uid, now(), expires_at, thanks_deadline)
+
+
+async def get_assignment(aid):
+    async with _pool.acquire() as c:
+        return await c.fetchrow("SELECT * FROM assignments WHERE id=$1", aid)
+
+
+async def pending_thanks(uid):
+    async with _pool.acquire() as c:
+        return await c.fetchrow(
+            "SELECT a.*, l.kind FROM assignments a LEFT JOIN lists l ON l.id=a.list_id "
+            "WHERE a.user_id=$1 AND a.revoked=FALSE AND a.thanked_at IS NULL "
+            "AND a.thanks_deadline IS NOT NULL AND a.thanks_deadline > $2 "
+            "ORDER BY a.id DESC LIMIT 1", uid, now())
+
+
+async def mark_thanked(uid):
+    async with _pool.acquire() as c:
+        return await c.fetchval(
+            "UPDATE assignments SET thanked_at=$2 WHERE id = ("
+            "  SELECT id FROM assignments WHERE user_id=$1 AND revoked=FALSE "
+            "  AND thanked_at IS NULL AND thanks_deadline IS NOT NULL "
+            "  ORDER BY id DESC LIMIT 1) RETURNING id", uid, now())
 
 
 async def last_assignment(uid):
@@ -320,7 +354,7 @@ async def last_assignment(uid):
 async def assignments(limit=20):
     async with _pool.acquire() as c:
         return await c.fetch(
-            "SELECT a.*, l.kind, l.label, u.username FROM assignments a "
+            "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
             "JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
             "ORDER BY a.id DESC LIMIT $1", limit)
 
