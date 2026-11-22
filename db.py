@@ -1,4 +1,3 @@
-# db.py
 import datetime as dt
 import json
 
@@ -51,7 +50,19 @@ DEFAULTS = {
     "group_only": "1",
     "group_link": "",
     "thanks_min": "10",
-    "warn_cmd": "/warn {user}",
+    "punizione": "ammonizione",
+    "pun_gruppo": ("⚠️ {user} — non hai rispettato il regolamento del gruppo: "
+                   "non hai ringraziato entro {minuti} minuti.\n\n"
+                   "Punizione prevista: <b>{punizione}</b>\n"
+                   "La applica un admin."),
+    "pun_admin": ("⚖️ <b>Punizione da applicare</b>\n\n"
+                  "Utente: {name}\n"
+                  "Username: {user}\n"
+                  "ID: <code>{id}</code>\n"
+                  "Lista: #{lista}\n"
+                  "Motivo: nessun ringraziamento entro {minuti} minuti.\n\n"
+                  "Da applicare: <b>{punizione}</b>\n"
+                  "{quando}"),
     "joke_on": "1",
     "joke_api": "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json",
     "joke_testo": ("Coglionazzo! 😂❤️\n"
@@ -140,6 +151,7 @@ async def init():
                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", PHRASE_VER)
         await c.execute("UPDATE settings SET value=$2 WHERE key='joke_api' "
                         "AND (value='' OR value=$1)", VECCHIA_API, NUOVA_API)
+        await c.execute("DELETE FROM settings WHERE key='warn_cmd'")
 
 
 async def close():
