@@ -1,4 +1,3 @@
-# utils.py
 import re
 import time
 
@@ -265,6 +264,7 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id):
         [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
         [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
         [B(text="✏️ Frasi per l'utente", callback_data="a:frasi")],
+        [B(text="⚖️ Punizione mancato ringraziamento", callback_data="a:pun")],
         [B(text="🤡 Barzellette sul tag", callback_data="a:joke")],
         [B(text="⬅️ Indietro", callback_data="a:menu")],
         [B(text="🏠 Menu", callback_data="a:menu")],
