@@ -52,6 +52,10 @@ DEFAULTS = {
     "group_link": "",
     "thanks_min": "10",
     "warn_cmd": "/warn {user}",
+    "joke_on": "1",
+    "joke_api": "https://italian-jokes.vercel.app/api/jokes",
+    "joke_testo": ("Coglionazzo! 😂❤️\n"
+                   "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
     "welcome": ("👋 Ciao {name}!\n\n"
                 "Benvenuto nel canale liste. 🎬\n"
                 "Premi il pulsante qui sotto per ricevere la tua lista IPTV: "
@@ -391,6 +395,36 @@ async def mark_thanked(uid):
             "  SELECT id FROM assignments WHERE user_id=$1 AND revoked=FALSE "
             "  AND thanked_at IS NULL AND thanks_deadline IS NOT NULL "
             "  ORDER BY id DESC LIMIT 1) RETURNING id", uid, now())
+
+
+async def set_thanked(aid, si):
+    """Forzatura manuale: si=True registra il ringraziamento, si=False lo toglie."""
+    async with _pool.acquire() as c:
+        if si:
+            await c.execute("UPDATE assignments SET thanked_at=$2, "
+                            "thanks_deadline=COALESCE(thanks_deadline,$2) WHERE id=$1",
+                            aid, now())
+        else:
+            await c.execute("UPDATE assignments SET thanked_at=NULL, "
+                            "thanks_deadline=$2 WHERE id=$1",
+                            aid, now() - dt.timedelta(minutes=1))
+
+
+async def utenti_con_assegnazioni():
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT u.user_id, u.username, u.full_name, COUNT(a.id) AS tot "
+            "FROM assignments a JOIN users u ON u.user_id=a.user_id "
+            "GROUP BY u.user_id, u.username, u.full_name "
+            "ORDER BY COALESCE(u.full_name, u.username)")
+
+
+async def assegnazioni_utente(uid, limit=25):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT a.*, l.kind, l.label FROM assignments a "
+            "LEFT JOIN lists l ON l.id=a.list_id WHERE a.user_id=$1 "
+            "ORDER BY a.id DESC LIMIT $2", uid, limit)
 
 
 async def last_assignment(uid):
