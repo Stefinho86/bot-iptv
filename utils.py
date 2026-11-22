@@ -180,6 +180,7 @@ def admin_menu():
         [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
         [B(text="📇 Elenco utenti", callback_data="lu:0"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
         [B(text="🚫 Utenti bannati", callback_data="lp:0")],
+        [B(text="🖐 Ringraziamenti manuali", callback_data="a:man")],
         [B(text="➕ Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="🔁 Reset attesa", callback_data="a:reset"), B(text="⏳ Cooldown", callback_data="s:cool")],
         [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
@@ -264,6 +265,7 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id):
         [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
         [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
         [B(text="✏️ Frasi per l'utente", callback_data="a:frasi")],
+        [B(text="🤡 Barzellette sul tag", callback_data="a:joke")],
         [B(text="⬅️ Indietro", callback_data="a:menu")],
         [B(text="🏠 Menu", callback_data="a:menu")],
     ])
