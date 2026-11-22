@@ -1,4 +1,3 @@
-# handlers.py
 import asyncio
 import datetime as dt
 import io
@@ -146,7 +145,9 @@ class SetTxt(StatesGroup):
     nolist = State()
     broken = State()
     minuti = State()
-    warn = State()
+    punizione = State()
+    pun_gruppo = State()
+    pun_admin = State()
     joke_testo = State()
     joke_api = State()
 
@@ -208,6 +209,7 @@ async def _statistiche_text():
     en = await db.get_int("enabled")
     cool = await db.get_int("cooldown_days")
     minuti = await db.get_int("thanks_min")
+    punizione = _esc(await db.get_setting("punizione"))
     return ("<b>📊 Statistiche</b>\n\n"
             f"📋 Liste libere: <b>{s['free']}</b>\n"
             f"📤 Liste assegnate: <b>{s['assigned']}</b>\n"
@@ -218,7 +220,8 @@ async def _statistiche_text():
             f"👥 Gruppo: <code>{gid or 'non impostato'}</code>\n"
             f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF (tutti passano)'}\n"
             f"⚡ Bot: {'ATTIVO' if en else 'SPENTO'}\n"
-            f"⏳ Attesa: {cool} giorni · ⏱ Ringraziamento: {minuti} min\n\n"
+            f"⏳ Attesa: {cool} giorni · ⏱ Ringraziamento: {minuti} min\n"
+            f"⚖️ Punizione: {punizione}\n\n"
             f"🕐 {_ora(dt.datetime.now(dt.timezone.utc))}")
 
 
@@ -258,8 +261,10 @@ def _comandi_text():
             "/toggle - accendi o spegni il bot\n"
             "/annulla - interrompi l'operazione in corso\n\n"
             "<b>✏️ Personalizzazione</b>\n"
-            "Impostazioni → Frasi per l'utente: testi inviati agli utenti, minuti per "
-            "ringraziare e comando warn.\n"
+            "Impostazioni → Frasi per l'utente: testi inviati agli utenti e minuti per "
+            "ringraziare.\n"
+            "Impostazioni → Punizione mancato ringraziamento: cosa scrivere nel gruppo e "
+            "agli admin quando il ringraziamento non arriva.\n"
             "Impostazioni → Barzellette sul tag: barzelletta quando il bot viene taggato "
             "nel gruppo.\n"
             "Pannello → Ringraziamenti manuali: segna a mano un ringraziamento.\n\n"
@@ -1158,17 +1163,8 @@ async def _controlla_ringraziamento(bot, uid, aid, minuti, nome, username):
         row = await db.get_assignment(aid)
         if not row or row["thanked_at"] or row["revoked"]:
             return
-        u = _pulisci_user(username)
-        utente = f"@{u}" if u else f"<a href=\"tg://user?id={uid}\">{_esc(nome)}</a>"
-        comando = _fmt(await db.get_setting("warn_cmd") or "/warn {user}",
-                       user=utente, id=uid, name=_esc(nome))
-        gid = await db.get_group_id()
-        if gid:
-            try:
-                await bot.send_message(gid, comando, link_preview_options=NO_PREVIEW)
-            except Exception as e:
-                print(f"warn: {type(e).__name__}: {e}")
         await db.log(uid, "thanks_miss", f"lista {row['list_id']}")
+        await _avvisa_punizione(bot, uid, row, minuti, nome, username)
         frase = _fmt(await db.get_setting("ph_ko"), name=_esc(nome), bot=await _bot_tag(bot))
         try:
             await bot.send_message(uid, frase, link_preview_options=NO_PREVIEW)
@@ -1176,6 +1172,46 @@ async def _controlla_ringraziamento(bot, uid, aid, minuti, nome, username):
             pass
     except Exception as e:
         print(f"controlla_ringraziamento: {type(e).__name__}: {e}")
+
+
+async def _avvisa_punizione(bot, uid, row, minuti, nome, username):
+    """Nessun comando a bot esterni: avviso nel gruppo + privato a tutti gli admin."""
+    punizione = (await db.get_setting("punizione") or "ammonizione").strip() or "ammonizione"
+    u = _pulisci_user(username)
+    menzione = f"@{u}" if u else f"<a href=\"tg://user?id={uid}\">{_esc(nome)}</a>"
+    valori = {"user": menzione, "name": _esc(nome), "id": uid, "minuti": minuti,
+              "punizione": _esc(punizione), "lista": row["list_id"],
+              "quando": _ora(dt.datetime.now(dt.timezone.utc))}
+
+    gid = await db.get_group_id()
+    if gid:
+        try:
+            await bot.send_message(gid, _fmt(await db.get_setting("pun_gruppo"), **valori),
+                                   link_preview_options=NO_PREVIEW)
+        except Exception as e:
+            print(f"avviso gruppo: {type(e).__name__}: {e}")
+
+    destinatari = set(config.SUPER_ADMINS)
+    for r in await db.all_admins():
+        destinatari.add(r["user_id"])
+    destinatari.discard(uid)
+
+    testo = _fmt(await db.get_setting("pun_admin"), **valori)
+    inviati = 0
+    for admin_id in destinatari:
+        try:
+            await bot.send_message(admin_id, testo, link_preview_options=NO_PREVIEW)
+            inviati += 1
+        except Exception as e:
+            print(f"avviso admin {admin_id}: {type(e).__name__}: {e}")
+    await db.log(uid, "pun_notify", f"lista {row['list_id']} · {inviati} admin")
+
+    if not inviati and gid:
+        try:
+            await bot.send_message(gid, "ℹ️ Nessun admin raggiungibile in privato: "
+                                        "provvedete voi.", link_preview_options=NO_PREVIEW)
+        except Exception:
+            pass
 
 
 async def deliver(msg, user, bot, adm=False):
@@ -1423,7 +1459,6 @@ async def _frasi_kb():
              for chiave, (etichetta, _s, _k, _p, *_r) in FRASI.items()]
     righe.append([InlineKeyboardButton(text="⏱ Minuti per ringraziare",
                                        callback_data="f:min")])
-    righe.append([InlineKeyboardButton(text="⚖️ Comando warn", callback_data="f:warn")])
     righe.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:set")])
     righe.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
     return InlineKeyboardMarkup(inline_keyboard=righe)
@@ -1447,11 +1482,12 @@ async def _frasi_text():
              "<code>{group}</code> → link del gruppo",
              "<code>{when}</code> → data e ora della prossima lista",
              "<code>{left}</code> → tempo che manca",
-             "<code>{link}</code> → link d'invito al gruppo",
-             "<code>{id}</code> → ID numerico (solo nel comando warn)", "",
+             "<code>{link}</code> → link d'invito al gruppo", "",
              "Ogni frase accetta solo i suoi segnaposto: quelli elencati quando la apri. "
              "Una graffa scritta male o un segnaposto inesistente non blocca l'invio: "
-             "resta stampato così com'è e te ne accorgi subito.", ""]
+             "resta stampato così com'è e te ne accorgi subito.", "",
+             "Il messaggio di punizione per il ringraziamento mancante non è qui: si "
+             "imposta da Impostazioni → ⚖️ Punizione mancato ringraziamento.", ""]
     for chiave, (etichetta, _s, _k, segnaposto, *_r) in FRASI.items():
         righe.append(f"{etichetta} → <code>{segnaposto}</code>")
     return "\n".join(righe)
@@ -1474,16 +1510,6 @@ async def cb_frase(cb: CallbackQuery, state: FSMContext):
         await _edit(cb.message,
                     f"Minuti a disposizione per ringraziare: <b>{attuale}</b>.\n\n"
                     f"Mandami il nuovo numero." + HINT, kb.nav("a:frasi"))
-        return
-    if chiave == "warn":
-        await cb.answer()
-        attuale = _esc(await db.get_setting("warn_cmd"))
-        await state.set_state(SetTxt.warn)
-        await _edit(cb.message,
-                    "Comando mandato nel gruppo quando il ringraziamento manca.\n\n"
-                    f"Attuale: <code>{attuale}</code>\n\n"
-                    "Segnaposto: <code>{user}</code> (menzione), <code>{id}</code>, "
-                    f"<code>{{name}}</code>.{HINT}", kb.nav("a:frasi"))
         return
     voce = FRASI.get(chiave)
     if not voce:
@@ -1535,15 +1561,126 @@ async def set_minuti(msg: Message, state: FSMContext):
                      reply_markup=await _frasi_kb())
 
 
-@admin_router.message(SetTxt.warn)
-async def set_warn(msg: Message, state: FSMContext):
+# ==================== PUNIZIONE MANCATO RINGRAZIAMENTO ====================
+PUN_HINT = ("\n\nSegnaposto: <code>{user}</code> menzione dell'utente, <code>{name}</code> "
+            "nome, <code>{id}</code> ID, <code>{minuti}</code> minuti, "
+            "<code>{punizione}</code> punizione, <code>{lista}</code> numero lista, "
+            "<code>{quando}</code> data e ora.")
+
+
+async def _pun_text():
+    punizione = _esc(await db.get_setting("punizione"))
+    gruppo = await db.get_setting("pun_gruppo")
+    admin = await db.get_setting("pun_admin")
+    destinatari = set(config.SUPER_ADMINS)
+    for r in await db.all_admins():
+        destinatari.add(r["user_id"])
+    return ("<b>⚖️ Punizione per mancato ringraziamento</b>\n\n"
+            "Allo scadere dei minuti il bot non lancia comandi a bot esterni: avvisa nel "
+            "gruppo l'utente e manda un privato a tutti gli admin e superadmin, che "
+            "applicano la punizione a mano.\n\n"
+            f"<b>Punizione impostata</b>\n{punizione}\n\n"
+            f"<b>Messaggio nel gruppo</b>\n{gruppo}\n\n"
+            f"<b>Messaggio agli admin</b>\n{admin}\n\n"
+            f"Destinatari del privato: <b>{len(destinatari)}</b> admin e superadmin.")
+
+
+async def _pun_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Cambia punizione", callback_data="pun:azione")],
+        [InlineKeyboardButton(text="✏️ Messaggio nel gruppo", callback_data="pun:gruppo")],
+        [InlineKeyboardButton(text="✏️ Messaggio agli admin", callback_data="pun:admin")],
+        [InlineKeyboardButton(text="🧪 Prova messaggio admin", callback_data="pun:prova")],
+        [InlineKeyboardButton(text="♻️ Ripristina predefiniti", callback_data="pun:reset")],
+        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:set")],
+        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+    ])
+
+
+@admin_router.callback_query(F.data == "a:pun")
+async def cb_pun(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    await state.clear()
+    await _edit(cb.message, await _pun_text(), await _pun_kb())
+
+
+@admin_router.callback_query(F.data.startswith("pun:"))
+async def cb_pun_act(cb: CallbackQuery, state: FSMContext):
+    cosa = cb.data.split(":")[1]
+    if cosa == "azione":
+        await cb.answer()
+        attuale = _esc(await db.get_setting("punizione"))
+        await state.set_state(SetTxt.punizione)
+        return await _edit(cb.message,
+                           "Che punizione si applica a chi non ringrazia?\n\n"
+                           f"Attuale: <b>{attuale}</b>\n\n"
+                           "Testo libero e breve: ammonizione, muto 24 ore, ban, "
+                           "richiamo ufficiale... entra in entrambi i messaggi." + HINT,
+                           kb.nav("a:pun"))
+    if cosa == "gruppo":
+        await cb.answer()
+        await state.set_state(SetTxt.pun_gruppo)
+        return await _edit(cb.message,
+                           "Messaggio mandato <b>nel gruppo</b>, taggando l'utente." + PUN_HINT
+                           + HINT, kb.nav("a:pun"))
+    if cosa == "admin":
+        await cb.answer()
+        await state.set_state(SetTxt.pun_admin)
+        return await _edit(cb.message,
+                           "Messaggio mandato <b>in privato agli admin</b>." + PUN_HINT
+                           + HINT, kb.nav("a:pun"))
+    if cosa == "prova":
+        minuti = await db.get_int("thanks_min")
+        valori = {"user": "@prova", "name": "Mario Rossi", "id": 123456789,
+                  "minuti": minuti, "punizione": _esc(await db.get_setting("punizione")),
+                  "lista": 42, "quando": _ora(dt.datetime.now(dt.timezone.utc))}
+        testo = _fmt(await db.get_setting("pun_admin"), **valori)
+        try:
+            await cb.message.bot.send_message(cb.from_user.id, testo,
+                                              link_preview_options=NO_PREVIEW)
+            await cb.answer("Prova inviata in privato")
+        except Exception as e:
+            await cb.answer(f"Invio non riuscito: {type(e).__name__}", show_alert=True)
+        return
+    if cosa == "reset":
+        for chiave in ("punizione", "pun_gruppo", "pun_admin"):
+            await db.set_setting(chiave, db.DEFAULTS[chiave])
+        await cb.answer("Predefiniti ripristinati")
+        return await _edit(cb.message, await _pun_text(), await _pun_kb())
+    await cb.answer("Azione sconosciuta", show_alert=True)
+
+
+@admin_router.message(SetTxt.punizione)
+async def set_punizione(msg: Message, state: FSMContext):
     t = (msg.text or "").strip()
     if not t:
-        return await msg.answer("Serve un testo.", reply_markup=kb.nav("a:frasi"))
-    await db.set_setting("warn_cmd", t)
+        return await msg.answer("Serve un testo.", reply_markup=kb.nav("a:pun"))
+    if len(t) > 80:
+        return await msg.answer("Tienilo sotto gli 80 caratteri: va dentro due frasi.",
+                                reply_markup=kb.nav("a:pun"))
+    await db.set_setting("punizione", t)
     await state.clear()
-    await msg.answer(f"Comando warn impostato:\n<code>{_esc(t)}</code>",
-                     reply_markup=await _frasi_kb())
+    await msg.answer(f"Punizione impostata: <b>{_esc(t)}</b>", reply_markup=await _pun_kb())
+
+
+@admin_router.message(SetTxt.pun_gruppo)
+async def set_pun_gruppo(msg: Message, state: FSMContext):
+    t = (msg.text or "").strip()
+    if not t:
+        return await msg.answer("Serve un testo.", reply_markup=kb.nav("a:pun"))
+    await db.set_setting("pun_gruppo", msg.html_text)
+    await state.clear()
+    await msg.answer("Messaggio per il gruppo aggiornato.", reply_markup=await _pun_kb())
+
+
+@admin_router.message(SetTxt.pun_admin)
+async def set_pun_admin(msg: Message, state: FSMContext):
+    t = (msg.text or "").strip()
+    if not t:
+        return await msg.answer("Serve un testo.", reply_markup=kb.nav("a:pun"))
+    await db.set_setting("pun_admin", msg.html_text)
+    await state.clear()
+    await msg.answer("Messaggio per gli admin aggiornato.", reply_markup=await _pun_kb())
 
 
 # ==================== BARZELLETTE (impostazioni) ====================
@@ -1661,6 +1798,7 @@ AZIONI = {
     "thanks": "ringraziamento ricevuto",
     "thanks_miss": "ringraziamento mancante",
     "thanks_man": "ringraziamento forzato",
+    "pun_notify": "avviso punizione inviato",
     "revoca": "assegnazione revocata",
     "ban": "utente bannato",
     "admin_add": "admin aggiunto",
