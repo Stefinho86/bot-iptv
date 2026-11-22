@@ -2,6 +2,7 @@
 import asyncio
 import datetime as dt
 import io
+import random
 import shutil
 import json
 import re
@@ -10,6 +11,7 @@ from html import escape as _esc
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import aiohttp
 from aiogram import Router, F, Bot
 from aiogram.filters import Command, CommandStart, CommandObject, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -49,10 +51,39 @@ HINT = "\n\nScrivi /annulla per interrompere."
 
 MAX_ANTEPRIMA = 15
 PER_PAGE = 10
+PER_PAGE_MAN = 8
 
 NONMOD = object()
 
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
+BARZELLETTE = [
+    "Un uomo entra in un bar e chiede un caffè. Il barista: «Decaffeinato?» "
+    "«No, grazie, lo prendo qui.»",
+    "Perché gli italiani non usano il GPS? Perché conoscono già tutte le scorciatoie "
+    "e tutte le scuse.",
+    "«Dottore, mi sento come un ponte.» «E cosa c'è sotto?» «L'acqua, dottore.»",
+    "Un tizio al ristorante: «Cameriere, questo pollo è duro!» «E chi se ne frega, "
+    "mica deve fare la caccia.»",
+    "Perché il mare è salato? Perché ci hanno pisciato dentro i pesci per secoli.",
+    "«Mamma, mi compri il gelato?» «No.» «E allora lo rubo.» «E allora compralo.»",
+    "Un uomo va dal medico: «Dottore, quando mi alzo la mattina mi gira la testa.» "
+    "«E chi te lo dice di alzarti?»",
+    "Perché le donne vivono più degli uomini? Perché non devono sposarsi con un uomo.",
+    "«Pronto, è il 118? Mia moglie sta per partorire!» «Respiri, signore.» "
+    "«E poi?» «E poi si calmi, non è lei che deve partorire.»",
+    "Un ubriaco entra in un bar alle 9 del mattino e chiede un bicchiere d'acqua. "
+    "Il barista lo guarda: «Ti senti bene?»",
+    "Perché l'italiano medio mette il sale nel caffè? Perché ha sentito che fa bene "
+    "alla pressione e lui non si fida di nessuno.",
+    "«Come si chiama suo figlio?» «Mario, come il padre.» «E il padre come si chiama?» "
+    "«Mario.» «E suo marito?» «Mario.» «E lei?» «Maria.»",
+    "Un uomo dice alla moglie: «Ho comprato una macchina nuova.» «E i soldi?» "
+    "«Quelli li ho comprati dopo.»",
+    "Perché il pesce non prende mai il raffreddore? Perché sta sempre in acqua e "
+    "non si scopre.",
+    "«Cameriere, c'è una mosca nel mio piatto.» «Normale, signore, il pesce è fresco.»",
+]
 
 
 class Add(StatesGroup):
@@ -78,6 +109,8 @@ class SetTxt(StatesGroup):
     broken = State()
     minuti = State()
     warn = State()
+    joke_testo = State()
+    joke_api = State()
 
 
 class Ask(StatesGroup):
@@ -186,9 +219,12 @@ def _comandi_text():
             "/setlink - link d'invito del gruppo\n"
             "/toggle - accendi o spegni il bot\n"
             "/annulla - interrompi l'operazione in corso\n\n"
-            "<b>✏️ Frasi e tempi</b>\n"
+            "<b>✏️ Personalizzazione</b>\n"
             "Impostazioni → Frasi per l'utente: testi inviati agli utenti, minuti per "
-            "ringraziare e comando warn.\n\n"
+            "ringraziare e comando warn.\n"
+            "Impostazioni → Barzellette sul tag: barzelletta quando il bot viene taggato "
+            "nel gruppo.\n"
+            "Pannello → Ringraziamenti manuali: segna a mano un ringraziamento.\n\n"
             "Tutti i comandi sugli utenti accettano ID, @username o inoltro.")
 
 
@@ -230,15 +266,15 @@ def _etichetta(r, stato=""):
 
 
 def _voce(n, r, bannato=False, motivo=None):
-    """Riga completa: nome cliccabile, username, ID. Niente tagli."""
+    """Riga singola: numero, nome cliccabile, username, ID."""
     link = _link(r["user_id"], r["username"])
     nome = _esc(_nome(r))
     u = _pulisci_user(r["username"])
     utente = f"@{_esc(u)}" if u else "no username"
     segno = "🚫" if bannato else "✅"
-    coda = f"\n      motivo: {_esc(motivo)}" if motivo else ""
-    return (f"{segno} {n}. <a href=\"{link}\">{nome}</a>\n"
-            f"      {utente} · ID <code>{r['user_id']}</code>{coda}")
+    coda = f" · <i>{_esc(motivo)}</i>" if motivo else ""
+    return (f"{segno} {n}. <a href=\"{link}\">{nome}</a> · {utente} · "
+            f"<code>{r['user_id']}</code>{coda}")
 
 
 def _etichetta_btn(n, r):
@@ -483,6 +519,47 @@ def _pulisci(uid):
             BULK.pop(cid, None)
 
 
+# ==================== BARZELLETTE ====================
+async def _barzelletta():
+    url = (await db.get_setting("joke_api") or "").strip()
+    if url:
+        try:
+            timeout = aiohttp.ClientTimeout(total=6)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(url) as r:
+                    if r.status == 200:
+                        dati = await r.json(content_type=None)
+                        testo = ""
+                        if isinstance(dati, dict):
+                            testo = (dati.get("joke") or dati.get("text")
+                                     or dati.get("battuta") or "")
+                            if not testo and dati.get("setup"):
+                                testo = (str(dati["setup"]) + "\n\n"
+                                         + str(dati.get("punchline") or ""))
+                        elif isinstance(dati, list) and dati and isinstance(dati[0], dict):
+                            testo = dati[0].get("joke") or dati[0].get("text") or ""
+                        if testo.strip():
+                            return testo.strip()
+        except Exception as e:
+            print(f"barzelletta: {type(e).__name__}: {e}")
+    return random.choice(BARZELLETTE)
+
+
+async def _risposta_tag(msg):
+    """Barzelletta + invito in privato. False se le barzellette sono spente."""
+    if await db.get_int("joke_on") == 0:
+        return False
+    battuta = await _barzelletta()
+    coda = _fmt(await db.get_setting("joke_testo"),
+                name=_esc(msg.from_user.first_name or "bello"))
+    try:
+        await msg.reply(f"{battuta}\n\n{coda}", link_preview_options=NO_PREVIEW)
+    except Exception as e:
+        print(f"risposta_tag: {type(e).__name__}: {e}")
+        return False
+    return True
+
+
 # ==================== PAGINE ====================
 async def _sono_admin(cb):
     """Risponde solo se NON e' admin: e' l'unica risposta in quel caso."""
@@ -499,18 +576,18 @@ async def _sono_admin(cb):
     return False
 
 
-def _pagine(tot):
-    return max(1, (tot + PER_PAGE - 1) // PER_PAGE)
+def _pagine(tot, per=PER_PAGE):
+    return max(1, (tot + per - 1) // per)
 
 
-def _taglio(righe, page):
-    pagine = _pagine(len(righe))
+def _taglio(righe, page, per=PER_PAGE):
+    pagine = _pagine(len(righe), per)
     page = max(0, min(int(page), pagine - 1))
-    fetta = righe[page * PER_PAGE:(page + 1) * PER_PAGE]
+    fetta = righe[page * per:(page + 1) * per]
     if not fetta and page > 0:
         page = 0
-        fetta = righe[:PER_PAGE]
-        pagine = _pagine(len(righe))
+        fetta = righe[:per]
+        pagine = _pagine(len(righe), per)
     return page, pagine, fetta
 
 
@@ -596,8 +673,8 @@ async def _mostra_utenti(msg, page, edit=True, cb=None, nota="", ok_testo=""):
                 InlineKeyboardButton(text=segno, callback_data=azione),
             ])
         coda = "" if pagine > 1 else "\nUnica pagina."
-        testo = (f"👤 Utenti normali: {tot} — pagina {page + 1} di {pagine}{coda}\n"
-                 f"Tocca il numero o il nome per aprire la chat.\n\n" + "\n\n".join(voci))
+        testo = (f"👤 Utenti normali: <b>{tot}</b> · pagina {page + 1}/{pagine}{coda}\n"
+                 f"Tocca il numero o il nome per aprire la chat.\n\n" + "\n".join(voci))
         errore = await _pubblica(
             msg, testo,
             InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:u", page, pagine)),
@@ -635,8 +712,8 @@ async def _mostra_bannati(msg, page, edit=True, cb=None, nota="", ok_testo=""):
                 InlineKeyboardButton(text="♻️", callback_data=azione),
             ])
         coda = "" if pagine > 1 else "\nUnica pagina."
-        testo = (f"🚫 Utenti bannati: {tot} — pagina {page + 1} di {pagine}{coda}\n"
-                 f"Tocca il numero o il nome per aprire la chat.\n\n" + "\n\n".join(voci))
+        testo = (f"🚫 Utenti bannati: <b>{tot}</b> · pagina {page + 1}/{pagine}{coda}\n"
+                 f"Tocca il numero o il nome per aprire la chat.\n\n" + "\n".join(voci))
         errore = await _pubblica(
             msg, testo,
             InlineKeyboardMarkup(inline_keyboard=con_url + _chiusura("a:n", page, pagine)),
@@ -723,6 +800,136 @@ async def cb_lista_ban(cb: CallbackQuery):
         await db.log(cb.from_user.id, "ban", str(uid))
         ok = "Bannato"
     await _mostra_utenti(cb.message, page, edit=True, cb=cb, ok_testo=ok)
+
+
+# ==================== RINGRAZIAMENTI MANUALI ====================
+@admin_router.callback_query(F.data == "a:man")
+async def cb_man(cb: CallbackQuery):
+    await _man_utenti(cb, 0)
+
+
+@admin_router.callback_query(F.data.startswith("a:man:"))
+async def cb_man_pagina(cb: CallbackQuery):
+    pagina, _corrente = _coppia(cb.data)
+    await _man_utenti(cb, pagina)
+
+
+async def _man_utenti(cb, page):
+    try:
+        tutti = list(await db.utenti_con_assegnazioni())
+        if not tutti:
+            await cb.answer()
+            return await _edit(cb.message, "Nessuna assegnazione registrata.",
+                               kb.nav("a:menu"))
+        page, pagine, righe = _taglio(tutti, page, PER_PAGE_MAN)
+        bottoni = []
+        for r in righe:
+            nome = _nome(r)
+            if len(nome) > 18:
+                nome = nome[:17] + "…"
+            u = _pulisci_user(r["username"])
+            utente = f"@{u}" if u else "no user"
+            bottoni.append([InlineKeyboardButton(
+                text=f"{nome} · {utente} · {r['tot']}",
+                callback_data=f"a:manu:{r['user_id']}:{page}")])
+        nav = [InlineKeyboardButton(text="◀️",
+                                    callback_data=f"a:man:{max(0, page - 1)}:{page}"),
+               InlineKeyboardButton(text=f"pag. {page + 1}/{pagine}", callback_data="a:noop"),
+               InlineKeyboardButton(text="▶️",
+                                    callback_data=f"a:man:{min(pagine - 1, page + 1)}:{page}")]
+        bottoni.append(nav)
+        bottoni.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
+        bottoni.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
+        await cb.answer()
+        await _edit(cb.message,
+                    f"<b>🖐 Ringraziamenti manuali</b>\n\n"
+                    f"Utenti con liste: <b>{len(tutti)}</b> · pagina {page + 1}/{pagine}\n"
+                    f"Scegli l'utente, poi la lista, poi lo stato.",
+                    InlineKeyboardMarkup(inline_keyboard=bottoni))
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+@admin_router.callback_query(F.data.startswith("a:manu:"))
+async def cb_man_utente(cb: CallbackQuery):
+    try:
+        _, _, uid, page = cb.data.split(":")
+        uid = int(uid)
+        righe = await db.assegnazioni_utente(uid)
+        utente = await db.get_user(uid)
+        bottoni = []
+        for r in righe:
+            segno = _stato_thanks(r)[:2]
+            bottoni.append([InlineKeyboardButton(
+                text=f"{segno} #{r['id']} · {_ora(r['assigned_at'], '%d/%m %H:%M')} · "
+                     f"L#{r['list_id']} {r['kind']}",
+                callback_data=f"a:manl:{r['id']}:{uid}")])
+        bottoni.append([InlineKeyboardButton(text="⬅️ Indietro",
+                                            callback_data=f"a:man:{page}:{page}")])
+        bottoni.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
+        chi = _nome(utente) if utente else str(uid)
+        await cb.answer()
+        await _edit(cb.message,
+                    f"<b>🖐 {_esc(chi)}</b> · ID <code>{uid}</code>\n\n"
+                    f"Liste prese: <b>{len(righe)}</b>. Scegline una per cambiarne lo stato.",
+                    InlineKeyboardMarkup(inline_keyboard=bottoni))
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+@admin_router.callback_query(F.data.startswith("a:manl:"))
+async def cb_man_lista(cb: CallbackQuery):
+    try:
+        _, _, aid, uid = cb.data.split(":")
+        aid, uid = int(aid), int(uid)
+        r = await db.get_assignment(aid)
+        if not r:
+            return await cb.answer("Assegnazione non trovata", show_alert=True)
+        bottoni = [
+            [InlineKeyboardButton(text="✅ SEGNA RINGRAZIATO",
+                                  callback_data=f"a:manset:{aid}:1:{uid}")],
+            [InlineKeyboardButton(text="❌ SEGNA NON RINGRAZIATO",
+                                  callback_data=f"a:manset:{aid}:0:{uid}")],
+            [InlineKeyboardButton(text="⬅️ Indietro", callback_data=f"a:manu:{uid}:0")],
+            [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+        ]
+        await cb.answer()
+        await _edit(cb.message,
+                    f"<b>Assegnazione #{aid}</b>\n\n"
+                    f"Lista: L#{r['list_id']}\n"
+                    f"Data: {_ora(r['assigned_at'])}\n"
+                    f"Stato attuale: {_stato_thanks(r)}\n\n"
+                    f"Scegli il nuovo stato.",
+                    InlineKeyboardMarkup(inline_keyboard=bottoni))
+    except Exception as e:
+        await _avvisa(cb, e)
+
+
+@admin_router.callback_query(F.data.startswith("a:manset:"))
+async def cb_man_set(cb: CallbackQuery):
+    try:
+        _, _, aid, si, uid = cb.data.split(":")
+        aid, uid, si = int(aid), int(uid), si == "1"
+        await db.set_thanked(aid, si)
+        await db.log(cb.from_user.id, "thanks_man", f"assegnazione {aid} -> {'si' if si else 'no'}")
+        r = await db.get_assignment(aid)
+        bottoni = [
+            [InlineKeyboardButton(text="✅ SEGNA RINGRAZIATO",
+                                  callback_data=f"a:manset:{aid}:1:{uid}")],
+            [InlineKeyboardButton(text="❌ SEGNA NON RINGRAZIATO",
+                                  callback_data=f"a:manset:{aid}:0:{uid}")],
+            [InlineKeyboardButton(text="⬅️ Indietro", callback_data=f"a:manu:{uid}:0")],
+            [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+        ]
+        await cb.answer("Ringraziato" if si else "Non ringraziato")
+        await _edit(cb.message,
+                    f"<b>Assegnazione #{aid}</b>\n\n"
+                    f"Lista: L#{r['list_id']}\n"
+                    f"Data: {_ora(r['assigned_at'])}\n"
+                    f"Stato attuale: {_stato_thanks(r)}",
+                    InlineKeyboardMarkup(inline_keyboard=bottoni))
+    except Exception as e:
+        await _avvisa(cb, e)
 
 
 # ==================== VERIFICA ANONIMI ====================
@@ -862,6 +1069,9 @@ async def cmd_lista(msg: Message, bot: Bot):
 
 @user_router.message(Trigger(), F.text)
 async def mention_any(msg: Message, bot: Bot):
+    if msg.chat.type != "private":
+        if await _risposta_tag(msg):
+            return
     await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
 
 
@@ -1259,6 +1469,94 @@ async def set_warn(msg: Message, state: FSMContext):
                      reply_markup=await _frasi_kb())
 
 
+# ==================== BARZELLETTE (impostazioni) ====================
+async def _joke_text():
+    acceso = await db.get_int("joke_on")
+    api = _esc(await db.get_setting("joke_api"))
+    testo = _esc(await db.get_setting("joke_testo"))
+    return ("<b>🤡 Barzellette sul tag</b>\n\n"
+            "Quando il bot viene taggato nel gruppo risponde con una barzelletta e poi "
+            "con la frase finale.\n\n"
+            f"Stato: <b>{'ATTIVE' if acceso else 'SPENTE'}</b>\n\n"
+            f"<b>Frase finale</b>\n{testo}\n\n"
+            f"<b>Servizio</b>\n<code>{api}</code>\n\n"
+            "Se il servizio non risponde, il bot usa barzellette interne.")
+
+
+async def _joke_kb():
+    acceso = await db.get_int("joke_on")
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=("⛔ Spegni barzellette" if acceso else "✅ Accendi barzellette"),
+                              callback_data="j:toggle")],
+        [InlineKeyboardButton(text="✏️ Frase finale", callback_data="j:testo")],
+        [InlineKeyboardButton(text="🌐 Indirizzo servizio", callback_data="j:api")],
+        [InlineKeyboardButton(text="🎲 Prova ora", callback_data="j:prova")],
+        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:set")],
+        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+    ])
+
+
+@admin_router.callback_query(F.data == "a:joke")
+async def cb_joke(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    await state.clear()
+    await _edit(cb.message, await _joke_text(), await _joke_kb())
+
+
+@admin_router.callback_query(F.data.startswith("j:"))
+async def cb_joke_act(cb: CallbackQuery, state: FSMContext):
+    cosa = cb.data.split(":")[1]
+    if cosa == "toggle":
+        await cb.answer("Aggiornato")
+        cur = await db.get_int("joke_on")
+        await db.set_setting("joke_on", "0" if cur else "1")
+        return await _edit(cb.message, await _joke_text(), await _joke_kb())
+    if cosa == "prova":
+        await cb.answer("Eccola")
+        battuta = await _barzelletta()
+        coda = _fmt(await db.get_setting("joke_testo"), name=_esc(cb.from_user.first_name or "bello"))
+        return await _edit(cb.message, f"{battuta}\n\n{coda}\n\n—————\n{await _joke_text()}",
+                           await _joke_kb())
+    if cosa == "testo":
+        await cb.answer()
+        await state.set_state(SetTxt.joke_testo)
+        return await _edit(cb.message,
+                           "Mandami la frase finale della barzelletta.\n\n"
+                           "Segnaposto: <code>{name}</code> (nome di chi ha taggato)." + HINT,
+                           kb.nav("a:joke"))
+    if cosa == "api":
+        await cb.answer()
+        await state.set_state(SetTxt.joke_api)
+        return await _edit(cb.message,
+                           "Mandami l'indirizzo del servizio barzellette.\n\n"
+                           "Deve restituire JSON con il campo <code>joke</code>. "
+                           "Scrivi <code>-</code> per usare solo la lista interna." + HINT,
+                           kb.nav("a:joke"))
+    await cb.answer("Azione sconosciuta", show_alert=True)
+
+
+@admin_router.message(SetTxt.joke_testo)
+async def set_joke_testo(msg: Message, state: FSMContext):
+    t = (msg.text or "").strip()
+    if not t:
+        return await msg.answer("Serve un testo.", reply_markup=kb.nav("a:joke"))
+    await db.set_setting("joke_testo", msg.html_text)
+    await state.clear()
+    await msg.answer("Frase finale aggiornata.", reply_markup=await _joke_kb())
+
+
+@admin_router.message(SetTxt.joke_api)
+async def set_joke_api(msg: Message, state: FSMContext):
+    t = (msg.text or "").strip()
+    if t and t != "-" and not t.startswith("http"):
+        return await msg.answer("Serve un indirizzo che inizi con http, oppure <code>-</code>.",
+                                reply_markup=kb.nav("a:joke"))
+    await db.set_setting("joke_api", "" if t == "-" else t)
+    await state.clear()
+    await msg.answer("Servizio aggiornato." if t != "-" else "Uso solo la lista interna.",
+                     reply_markup=await _joke_kb())
+
+
 # ==================== COMANDI ELENCO ====================
 @admin_router.message(Command("elenco"))
 async def elenco_cmd(msg: Message, state: FSMContext):
@@ -1282,6 +1580,7 @@ AZIONI = {
     "consegna": "lista consegnata",
     "thanks": "ringraziamento ricevuto",
     "thanks_miss": "ringraziamento mancante",
+    "thanks_man": "ringraziamento forzato",
     "revoca": "assegnazione revocata",
     "ban": "utente bannato",
     "admin_add": "admin aggiunto",
@@ -1298,8 +1597,8 @@ def _log_txt(righe):
         quando = _ora(r["ts"])
         chi = f"@{r['username']}" if r["username"] else (r["full_name"] or str(r["actor"]))
         cosa = AZIONI.get(r["action"], r["action"])
-        det = f" - {r['detail']}" if r["detail"] else ""
-        out.append(f"{quando} | {chi} | {cosa}{det}")
+        det = f" · {r['detail']}" if r["detail"] else ""
+        out.append(f"{quando} · {chi} · {cosa}{det}")
     out.append("")
     out.append(f"Totale righe: {len(righe)}")
     return "\n".join(out)
@@ -1909,7 +2208,7 @@ async def free_cmd(msg: Message, state: FSMContext):
     if not rows:
         return await msg.answer("Nessuna lista libera. Inseriscine una con /aggiungi.",
                                 reply_markup=kb.admin_menu())
-    txt = "\n".join(f"#{r['id']} - {r['kind']} - {r['label'] or '-'}" for r in rows)
+    txt = "\n".join(f"#{r['id']} · {r['kind']} · {r['label'] or '-'}" for r in rows)
     await msg.answer(f"Liste libere:\n\n{txt}", reply_markup=kb.admin_menu())
 
 
@@ -1934,17 +2233,15 @@ async def _show_free(cb, kind, page):
     for n, r in enumerate(righe, inizio + 1):
         p = await db.payload_of(r)
         if r["kind"] == "xtream":
-            corpo = (f"<b>#{n} XTREAM</b>\nServer: <code>{p['server']}</code>\n"
-                     f"User: <code>{p['username']}</code>\nPass: <code>{p['password']}</code>\n"
-                     f"M3U: <code>{p['server']}/get.php?username={p['username']}"
-                     f"&password={p['password']}&type=m3u_plus</code>")
+            corpo = (f"<b>#{n}</b> · XTREAM · user <code>{p['username']}</code> · "
+                     f"pass <code>{p['password']}</code>\n<code>{p['server']}</code>")
             etichetta = p.get("username") or "xtream"
         elif r["kind"] == "stalker":
-            corpo = (f"<b>#{n} STALKER</b>\nPortal: <code>{p['portal']}</code>\n"
-                     f"MAC: <code>{p['mac']}</code>")
+            corpo = (f"<b>#{n}</b> · STALKER · MAC <code>{p['mac']}</code>\n"
+                     f"<code>{p['portal']}</code>")
             etichetta = p.get("mac") or "stalker"
         else:
-            corpo = f"<b>#{n} M3U</b>\n<code>{p['url']}</code>"
+            corpo = f"<b>#{n}</b> · M3U\n<code>{p['url']}</code>"
             etichetta = p.get("url") or "m3u"
         blocchi.append(corpo)
         segno = "✅" if r["id"] in sel else "🗑"
@@ -2056,14 +2353,18 @@ async def _hist(target, edit=False):
     for r in rows:
         who = f"@{r['username']}" if r["username"] else (_nome(r) if r["full_name"]
                                                          else str(r["user_id"]))
-        when = _ora(r["assigned_at"], "%d/%m/%y %H:%M")
-        lines.append(f"#{r['id']} - lista #{r['list_id']} ({r['kind']}) -> {who} · "
-                     f"{_stato_thanks(r)} - {when}")
+        if len(who) > 17:
+            who = who[:16] + "…"
+        when = _ora(r["assigned_at"], "%d/%m %H:%M")
+        lines.append(f"#{r['id']} · {when} · L#{r['list_id']} {r['kind']} · "
+                     f"{who} → {_stato_thanks(r)}")
     buttons = [[InlineKeyboardButton(text=f"Revoca #{r['id']}", callback_data=f"a:rev:{r['id']}")]
                for r in rows[:10]]
+    buttons.append([InlineKeyboardButton(text="🖐 Ringraziamenti", callback_data="a:man")])
     buttons.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
     buttons.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    testo = (f"Ultime assegnazioni — ✅ {si} · ⏳ {attesa} · ❌ {no}\n\n" + "\n".join(lines))
+    testo = (f"<b>Ultime assegnazioni</b>\n"
+             f"✅ {si} · ⏳ {attesa} · ❌ {no}\n\n" + "\n".join(lines))
     kbd = InlineKeyboardMarkup(inline_keyboard=buttons)
     if edit:
         return await _edit(target, testo, kbd)
@@ -2112,8 +2413,8 @@ async def _show_users(msg, q):
         return await msg.answer("Nessun utente trovato.", reply_markup=kb.nav("a:menu"))
     for r in rows:
         await msg.answer(
-            f"<b>{_esc(_nome(r))}</b>\n{_esc(_utente(r))}\nID: <code>{r['user_id']}</code>\n"
-            f"bannato: {'si' if r['banned'] else 'no'} - prossima: "
+            f"<b>{_esc(_nome(r))}</b> · {_esc(_utente(r))} · <code>{r['user_id']}</code>\n"
+            f"bannato: {'si' if r['banned'] else 'no'} · prossima: "
             f"{_ora(r['next_available']) if r['next_available'] else '-'}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [kb.open_row(r["user_id"], r["username"])],
