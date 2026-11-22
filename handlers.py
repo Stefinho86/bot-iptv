@@ -72,6 +72,8 @@ class SetTxt(StatesGroup):
     richiesta = State()
     ok = State()
     ko = State()
+    nolist = State()
+    broken = State()
     minuti = State()
     warn = State()
 
@@ -140,35 +142,43 @@ async def _statistiche_text():
 
 
 def _comandi_text():
-    return ("<b>Comandi</b>\n\n"
-            "<b>Liste</b>\n"
+    return ("<b>📖 Comandi</b>\n\n"
+            "<b>👤 Utente</b>\n"
+            "/start - avvia il bot e mostra il benvenuto\n"
+            "/lista - ricevi una lista IPTV\n"
+            "/mio - la tua lista attuale e lo stato del ringraziamento\n"
+            "/ping - verifica che il bot risponda (chat id e tipo chat)\n\n"
+            "<b>🎬 Liste</b>\n"
             "/aggiungi - inserisci una lista (M3U, Xtream, Stalker, foto o txt)\n"
             "/liberi - liste non assegnate\n"
             "/assegnazioni - storico consegne con i ringraziamenti\n"
             "/revoca - ritira un'assegnazione\n"
             "/esporta - esporta le liste libere in JSON\n"
-            "/log - scarica il file di log\n\n"
-            "<b>Utenti</b>\n"
+            "/log - scarica il file di log attività\n\n"
+            "<b>👥 Utenti</b>\n"
             "/utenti - cerca un utente\n"
             "/elenco - elenco utenti a pagine\n"
             "/bannati - elenco utenti bannati\n"
             "/ban - blocca un utente\n"
             "/unban - sblocca un utente\n"
-            "/reset - azzera l'attesa\n\n"
-            "<b>Amministratori</b>\n"
-            "/admin_add - aggiungi amministratore\n"
-            "/admin_del - rimuovi amministratore\n"
-            "/verifica - riverifica un admin anonimo\n"
-            "/deverifica - revoca la verifica\n\n"
-            "<b>Sistema</b>\n"
-            "/admin - pannello\n"
-            "/stato - diagnostica\n"
+            "/reset - azzera l'attesa di un utente\n\n"
+            "<b>🛡 Amministratori</b>\n"
+            "/admin_add - aggiungi un amministratore\n"
+            "/admin_del - rimuovi un amministratore\n"
+            "/verifica - verifica un admin che scrive in anonimo\n"
+            "/deverifica - revoca la verifica della chat\n\n"
+            "<b>⚙️ Sistema</b>\n"
+            "/admin - pannello di controllo\n"
+            "/stato - diagnostica di gruppo, filtro e bot\n"
             "/comandi - questo elenco\n"
-            "/cooldown - giorni di attesa\n"
+            "/cooldown - giorni di attesa tra due liste\n"
             "/setgroup - gruppo autorizzato\n"
-            "/setlink - link d'invito\n"
+            "/setlink - link d'invito del gruppo\n"
             "/toggle - accendi o spegni il bot\n"
-            "/annulla - interrompi\n\n"
+            "/annulla - interrompi l'operazione in corso\n\n"
+            "<b>✏️ Frasi e tempi</b>\n"
+            "Impostazioni → Frasi per l'utente: testi inviati agli utenti, minuti per "
+            "ringraziare e comando warn.\n\n"
             "Tutti i comandi sugli utenti accettano ID, @username o inoltro.")
 
 
@@ -897,11 +907,13 @@ async def deliver(msg, user, bot, adm=False):
             if dt.datetime.now(dt.timezone.utc) < nxt:
                 left = nxt - dt.datetime.now(dt.timezone.utc)
                 txt = (await db.get_setting("deny_text")).format(
-                    when=_ora(nxt, "%d/%m/%Y alle %H:%M"), left=_human(left))
+                    when=_ora(nxt, "%d/%m/%Y alle %H:%M"), left=_human(left),
+                    name=_esc(user.first_name or "utente"))
                 return await msg.answer(txt)
 
         if await db.free_count() == 0:
-            return await msg.answer(await db.get_setting("no_lists"))
+            return await msg.answer(
+                (await db.get_setting("no_lists")).format(name=_esc(user.first_name or "utente")))
 
         chosen = payload = shot = None
         for _ in range(await db.get_int("max_attempts")):
@@ -916,7 +928,8 @@ async def deliver(msg, user, bot, adm=False):
                 break
 
         if not chosen:
-            return await msg.answer(await db.get_setting("broken_all"))
+            return await msg.answer(
+                (await db.get_setting("broken_all")).format(name=_esc(user.first_name or "utente")))
 
         minuti = await db.get_int("thanks_min") or 10
         adesso = dt.datetime.now(dt.timezone.utc)
@@ -1081,25 +1094,38 @@ async def cb_toggle(cb: CallbackQuery):
 # ==================== FRASI PER L'UTENTE ====================
 FRASI = {
     "wel": ("👋 Benvenuto", SetTxt.welcome, "welcome",
-            "{name} {days}"),
+            "{name} {days}",
+            "nome dell'utente", "giorni di attesa"),
     "cons": ("🎬 Consegna lista", SetTxt.consegna, "ph_consegna",
-             "{name} {days} {bot}"),
+             "{name} {days} {bot}",
+             "nome dell'utente", "giorni", "@ del bot"),
     "rich": ("⏱ Richiesta ringraziamento", SetTxt.richiesta, "ph_richiesta",
-             "{name} {minuti} {bot} {group}"),
+             "{name} {minuti} {bot} {group}",
+             "nome", "minuti a disposizione", "@ del bot", "link del gruppo"),
     "ok": ("🙏 Ringraziamento ricevuto", SetTxt.ok, "ph_ok",
-           "{name} {bot}"),
+           "{name} {bot}",
+           "nome dell'utente", "@ del bot"),
     "ko": ("❌ Ringraziamento mancato", SetTxt.ko, "ph_ko",
-           "{name} {bot}"),
-    "deny": ("🚫 Rifiuto per attesa", SetTxt.deny, "deny_text",
-             "{when} {left}"),
+           "{name} {bot}",
+           "nome dell'utente", "@ del bot"),
+    "deny": ("⏳ Rifiuto per attesa", SetTxt.deny, "deny_text",
+             "{name} {when} {left}",
+             "nome", "data e ora della prossima lista", "tempo che manca"),
     "blk": ("⛔ Blocco non membro", SetTxt.not_member, "not_member",
-            "{link}"),
+            "{link}",
+            "link d'invito al gruppo"),
+    "nolist": ("📭 Nessuna lista disponibile", SetTxt.nolist, "no_lists",
+               "{name}",
+               "nome dell'utente"),
+    "broken": ("🛠 Liste tutte rotte", SetTxt.broken, "broken_all",
+               "{name}",
+               "nome dell'utente"),
 }
 
 
 async def _frasi_kb():
     righe = [[InlineKeyboardButton(text=etichetta, callback_data=f"f:{chiave}")]
-             for chiave, (etichetta, _s, _k, _p) in FRASI.items()]
+             for chiave, (etichetta, _s, _k, _p, *_r) in FRASI.items()]
     righe.append([InlineKeyboardButton(text="⏱ Minuti per ringraziare",
                                        callback_data="f:min")])
     righe.append([InlineKeyboardButton(text="⚖️ Comando warn", callback_data="f:warn")])
@@ -1109,11 +1135,29 @@ async def _frasi_kb():
 
 
 async def _frasi_text():
-    righe = ["<b>✏️ Frasi per l'utente</b>", ""]
-    for chiave, (etichetta, _s, _k, segnaposto) in FRASI.items():
-        righe.append(f"{etichetta} — segnaposto: <code>{segnaposto}</code>")
-    righe.append("")
-    righe.append("Tocca una frase per riscriverla. Le graffe restano segnaposto.")
+    righe = ["<b>✏️ Frasi per l'utente</b>", "",
+             "Questi sono i testi che il bot manda agli utenti. Tocca una frase per "
+             "riscriverla.", "",
+             "<b>Che cosa sono i segnaposto</b>",
+             "I segnaposto sono i pezzi tra graffe, per esempio <code>{name}</code>. "
+             "Il bot li sostituisce da solo al momento dell'invio: tu scrivi "
+             "<code>{name}</code> e l'utente legge il suo nome. Servono perché la stessa "
+             "frase va bene per tutti. <b>Non vanno tradotti né cancellati</b>: se li "
+             "togli, quell'informazione sparisce dalla frase.", "",
+             "<b>Legenda</b>",
+             "<code>{name}</code> → nome dell'utente",
+             "<code>{bot}</code> → @ del bot",
+             "<code>{days}</code> → giorni di attesa",
+             "<code>{minuti}</code> → minuti per ringraziare",
+             "<code>{group}</code> → link del gruppo",
+             "<code>{when}</code> → data e ora della prossima lista",
+             "<code>{left}</code> → tempo che manca",
+             "<code>{link}</code> → link d'invito al gruppo",
+             "<code>{id}</code> → ID numerico (solo nel comando warn)", "",
+             "Ogni frase accetta solo i suoi segnaposto: quelli elencati quando la apri. "
+             "Le graffe in più vengono lasciate scritte così come sono.", ""]
+    for chiave, (etichetta, _s, _k, segnaposto, *_r) in FRASI.items():
+        righe.append(f"{etichetta} → <code>{segnaposto}</code>")
     return "\n".join(righe)
 
 
@@ -1148,22 +1192,27 @@ async def cb_frase(cb: CallbackQuery, state: FSMContext):
     voce = FRASI.get(chiave)
     if not voce:
         return await cb.answer("Frase non valida", show_alert=True)
-    etichetta, stato, setting, segnaposto = voce
+    etichetta, stato, setting, segnaposto, *significati = voce
+    legenda = "\n".join(f"<code>{s}</code> → {m}"
+                        for s, m in zip(segnaposto.split(), significati))
     await cb.answer()
     attuale = _esc(await db.get_setting(setting))
     await state.set_state(stato)
     await _edit(cb.message,
-                f"<b>{etichetta}</b>\n\nAttuale:\n{attuale}\n\n"
-                f"Segnaposto: <code>{segnaposto}</code>.\n"
+                f"<b>{etichetta}</b>\n\n<b>Attuale</b>\n{attuale}\n\n"
+                f"<b>Segnaposto che puoi usare</b>\n{legenda}\n\n"
+                f"Sono pezzi che il bot riempie da solo: lasciali tra graffe, "
+                f"spostali o togli quelli che non ti servono.\n"
                 f"Mandami il nuovo testo." + HINT, kb.nav("a:frasi"))
 
 
 @admin_router.message(StateFilter(SetTxt.welcome, SetTxt.consegna, SetTxt.richiesta,
-                                  SetTxt.ok, SetTxt.ko, SetTxt.deny, SetTxt.not_member))
+                                  SetTxt.ok, SetTxt.ko, SetTxt.deny, SetTxt.not_member,
+                                  SetTxt.nolist, SetTxt.broken))
 async def set_frase(msg: Message, state: FSMContext):
     stato = await state.get_state()
     setting = None
-    for _chiave, (_e, s, k, _p) in FRASI.items():
+    for _chiave, (_e, s, k, *_r) in FRASI.items():
         if s.state == stato:
             setting = k
             break
