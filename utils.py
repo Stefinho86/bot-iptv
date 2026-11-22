@@ -1,3 +1,5 @@
+# utils.py
+import re
 import time
 
 from aiogram.filters import BaseFilter
@@ -7,6 +9,8 @@ from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
 import db
 
 ANON_ID = 1087968824
+
+GRAZIE_RE = re.compile(r"\b(grazie|ringrazi\w*|grz|thanks|thx)\b", re.I)
 
 _TOKENS = {}
 
@@ -110,6 +114,45 @@ class NotCommand(BaseFilter):
     async def __call__(self, message: Message) -> bool:
         t = message.text or message.caption or ""
         return not t.startswith("/")
+
+
+class Ringrazia(BaseFilter):
+    """Messaggio di ringraziamento: gruppo giusto, utente non admin, consegna in attesa.
+    Vale il tag del bot, la risposta al bot, una foto, o una frase di grazie."""
+
+    async def __call__(self, message: Message, bot) -> bool:
+        try:
+            if message.chat.type not in ("group", "supergroup"):
+                return False
+            user = message.from_user
+            if not user or user.is_bot:
+                return False
+            gid = await db.get_group_id()
+            if not gid or message.chat.id != gid:
+                return False
+            if await db.is_admin(user.id, user.username):
+                return False
+            if not await db.pending_thanks(user.id):
+                return False
+            if message.photo:
+                return True
+            testo = message.text or message.caption or ""
+            if GRAZIE_RE.search(testo):
+                return True
+            rip = message.reply_to_message
+            if rip and rip.from_user and rip.from_user.id == bot.id:
+                return True
+            if message.entities:
+                me = await bot.me()
+                for e in message.entities:
+                    if e.type == "mention":
+                        frag = testo[e.offset:e.offset + e.length].lstrip("@").lower()
+                        if frag == me.username.lower():
+                            return True
+            return False
+        except Exception as e:
+            print(f"Ringrazia: {type(e).__name__}: {e}")
+            return False
 
 
 def _nav(back):
@@ -220,8 +263,7 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id):
         [B(text=f"🖼 Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
         [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
         [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
-        [B(text="✏️ Testo benvenuto", callback_data="s:wel"), B(text="✏️ Testo rifiuto", callback_data="s:deny")],
-        [B(text="✏️ Testo blocco", callback_data="s:ntext")],
+        [B(text="✏️ Frasi per l'utente", callback_data="a:frasi")],
         [B(text="⬅️ Indietro", callback_data="a:menu")],
         [B(text="🏠 Menu", callback_data="a:menu")],
     ])
