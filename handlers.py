@@ -43,6 +43,8 @@ ROMA = ZoneInfo("Europe/Rome")
 
 MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 
+SEGNAPOSTO_RE = re.compile(r"\{(\w+)\}")
+
 HINT = "\n\nScrivi /annulla per interrompere."
 
 MAX_ANTEPRIMA = 15
@@ -88,6 +90,14 @@ def _ora(valore, fmt="%d/%m/%Y %H:%M"):
         return valore.astimezone(ROMA).strftime(fmt)
     except Exception:
         return "-"
+
+
+def _fmt(testo, **valori):
+    """Riempie solo i segnaposto conosciuti. Le graffe estranee restano scritte."""
+    def sostituisci(m):
+        chiave = m.group(1)
+        return str(valori[chiave]) if chiave in valori else m.group(0)
+    return SEGNAPOSTO_RE.sub(sostituisci, testo or "")
 
 
 def _num(data, idx):
@@ -755,8 +765,8 @@ async def anon_cb(cb: CallbackQuery, bot: Bot):
 # ==================== UTENTE ====================
 async def _welcome(msg):
     days = await db.get_int("cooldown_days")
-    txt = (await db.get_setting("welcome")).format(
-        name=msg.from_user.first_name or "utente", days=days)
+    txt = _fmt(await db.get_setting("welcome"),
+               name=msg.from_user.first_name or "utente", days=days)
     await msg.answer(txt, reply_markup=kb.user_kb(days))
 
 
@@ -838,8 +848,7 @@ async def thanks(msg: Message, bot: Bot):
         return
     await db.log(msg.from_user.id, "thanks", f"lista {row['list_id']}")
     nome = msg.from_user.first_name or "utente"
-    testo = (await db.get_setting("ph_ok")).format(
-        name=_esc(nome), bot=await _bot_tag(bot))
+    testo = _fmt(await db.get_setting("ph_ok"), name=_esc(nome), bot=await _bot_tag(bot))
     try:
         await msg.reply(testo, link_preview_options=NO_PREVIEW)
     except Exception:
@@ -864,8 +873,8 @@ async def _controlla_ringraziamento(bot, uid, aid, minuti, nome, username):
             return
         u = _pulisci_user(username)
         utente = f"@{u}" if u else f"<a href=\"tg://user?id={uid}\">{_esc(nome)}</a>"
-        comando = (await db.get_setting("warn_cmd") or "/warn {user}").format(
-            user=utente, id=uid, name=_esc(nome))
+        comando = _fmt(await db.get_setting("warn_cmd") or "/warn {user}",
+                       user=utente, id=uid, name=_esc(nome))
         gid = await db.get_group_id()
         if gid:
             try:
@@ -873,8 +882,7 @@ async def _controlla_ringraziamento(bot, uid, aid, minuti, nome, username):
             except Exception as e:
                 print(f"warn: {type(e).__name__}: {e}")
         await db.log(uid, "thanks_miss", f"lista {row['list_id']}")
-        frase = (await db.get_setting("ph_ko")).format(
-            name=_esc(nome), bot=await _bot_tag(bot))
+        frase = _fmt(await db.get_setting("ph_ko"), name=_esc(nome), bot=await _bot_tag(bot))
         try:
             await bot.send_message(uid, frase, link_preview_options=NO_PREVIEW)
         except Exception:
@@ -906,14 +914,14 @@ async def deliver(msg, user, bot, adm=False):
             nxt = u["next_available"]
             if dt.datetime.now(dt.timezone.utc) < nxt:
                 left = nxt - dt.datetime.now(dt.timezone.utc)
-                txt = (await db.get_setting("deny_text")).format(
-                    when=_ora(nxt, "%d/%m/%Y alle %H:%M"), left=_human(left),
-                    name=_esc(user.first_name or "utente"))
+                txt = _fmt(await db.get_setting("deny_text"),
+                           when=_ora(nxt, "%d/%m/%Y alle %H:%M"), left=_human(left),
+                           name=_esc(user.first_name or "utente"))
                 return await msg.answer(txt)
 
         if await db.free_count() == 0:
             return await msg.answer(
-                (await db.get_setting("no_lists")).format(name=_esc(user.first_name or "utente")))
+                _fmt(await db.get_setting("no_lists"), name=_esc(user.first_name or "utente")))
 
         chosen = payload = shot = None
         for _ in range(await db.get_int("max_attempts")):
@@ -929,7 +937,7 @@ async def deliver(msg, user, bot, adm=False):
 
         if not chosen:
             return await msg.answer(
-                (await db.get_setting("broken_all")).format(name=_esc(user.first_name or "utente")))
+                _fmt(await db.get_setting("broken_all"), name=_esc(user.first_name or "utente")))
 
         minuti = await db.get_int("thanks_min") or 10
         adesso = dt.datetime.now(dt.timezone.utc)
@@ -942,8 +950,8 @@ async def deliver(msg, user, bot, adm=False):
 
         nome = user.first_name or "utente"
         bot_tag = await _bot_tag(bot)
-        frase = (await db.get_setting("ph_consegna")).format(
-            name=_esc(nome), days=days, bot=bot_tag)
+        frase = _fmt(await db.get_setting("ph_consegna"),
+                     name=_esc(nome), days=days, bot=bot_tag)
         caption = (f"<b>La tua lista IPTV</b> (#{chosen['id']})\n\n"
                    f"{_payload_text(chosen['kind'], payload)}\n\n"
                    f"Prossima lista: <b>{_ora(exp)}</b>\n\n"
@@ -956,9 +964,9 @@ async def deliver(msg, user, bot, adm=False):
             await msg.answer(caption, link_preview_options=NO_PREVIEW)
 
         if deadline:
-            avviso = (await db.get_setting("ph_richiesta")).format(
-                name=_esc(nome), minuti=minuti, bot=bot_tag,
-                group=(await db.get_setting("group_link") or ""))
+            avviso = _fmt(await db.get_setting("ph_richiesta"),
+                          name=_esc(nome), minuti=minuti, bot=bot_tag,
+                          group=(await db.get_setting("group_link") or ""))
             await msg.answer(avviso, reply_markup=await kb.join_kb(),
                              link_preview_options=NO_PREVIEW)
             asyncio.create_task(
@@ -1155,7 +1163,8 @@ async def _frasi_text():
              "<code>{link}</code> → link d'invito al gruppo",
              "<code>{id}</code> → ID numerico (solo nel comando warn)", "",
              "Ogni frase accetta solo i suoi segnaposto: quelli elencati quando la apri. "
-             "Le graffe in più vengono lasciate scritte così come sono.", ""]
+             "Una graffa scritta male o un segnaposto inesistente non blocca l'invio: "
+             "resta stampato così com'è e te ne accorgi subito.", ""]
     for chiave, (etichetta, _s, _k, segnaposto, *_r) in FRASI.items():
         righe.append(f"{etichetta} → <code>{segnaposto}</code>")
     return "\n".join(righe)
