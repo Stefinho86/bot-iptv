@@ -81,10 +81,29 @@ DEFAULTS = {
                    "Avvisa un admin, ci stiamo lavorando. 🔧"),
 }
 
-FRASI_CHIAVI = ["welcome", "ph_consegna", "ph_richiesta", "ph_ok", "ph_ko",
-                "deny_text", "not_member", "no_lists", "broken_all"]
+VECCHIE_FRASI = {
+    "welcome": ("Ciao {name}!\n\n"
+                "Premi il pulsante per ricevere una lista IPTV. Una lista ogni {days} giorni."),
+    "ph_consegna": ("Ecco la tua lista, {name}. Se funziona come deve, fammelo sapere nel "
+                    "gruppo: è la nostra unica prova che il lavoro è buono. 🎬"),
+    "ph_richiesta": ("⏱ <b>Hai {minuti} minuti</b> per ringraziare nel gruppo: manda lo "
+                     "<b>screenshot</b> della lista che funziona e una frase di ringraziamento, "
+                     "taggando {bot}.\n\nSe non lo fai in tempo, parto con un avviso "
+                     "automatico agli admin."),
+    "ph_ok": "🙏 Grazie {name}, ringraziamento registrato. Così si fa.",
+    "ph_ko": ("⏱ Non ho visto il tuo ringraziamento nel gruppo, {name}. Manda lo screenshot "
+              "e un grazie taggando {bot}, così gli admin sanno che la lista va bene."),
+    "deny_text": ("Hai gia ricevuto una lista. Potrai richiederne un'altra <b>{when}</b> "
+                  "(tra {left})."),
+    "not_member": ("Per usare questo bot devi essere membro del gruppo ufficiale. "
+                   "Entra nel gruppo, poi riprova con /start."),
+    "no_lists": "Al momento non ci sono liste disponibili. Riprova piu tardi.",
+    "broken_all": "Nessuna lista ha superato il test. Avvisa un admin.",
+}
 
-PHRASE_VER = "2"
+FRASI_CHIAVI = list(VECCHIE_FRASI)
+
+PHRASE_VER = "3"
 
 _pool = None
 
@@ -107,9 +126,8 @@ async def init():
         versione = await c.fetchval("SELECT value FROM settings WHERE key='ph_ver'")
         if (versione or "") != PHRASE_VER:
             for k in FRASI_CHIAVI:
-                await c.execute("INSERT INTO settings(key,value) VALUES($1,$2) "
-                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                                k, DEFAULTS[k])
+                await c.execute("UPDATE settings SET value=$2 WHERE key=$1 AND value=$3",
+                                k, DEFAULTS[k], VECCHIE_FRASI[k])
             await c.execute("INSERT INTO settings(key,value) VALUES('ph_ver',$1) "
                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", PHRASE_VER)
 
