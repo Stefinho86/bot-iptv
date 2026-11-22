@@ -63,8 +63,8 @@ BARZELLETTE = [
     "Perché gli italiani non usano il GPS? Perché conoscono già tutte le scorciatoie "
     "e tutte le scuse.",
     "«Dottore, mi sento come un ponte.» «E cosa c'è sotto?» «L'acqua, dottore.»",
-    "Un tizio al ristorante: «Cameriere, questo pollo è duro!» «E chi se ne frega, "
-    "mica deve fare la caccia.»",
+    "Al ristorante: «Cameriere, questo pollo è duro!» «E chi se ne frega, mica deve "
+    "fare la caccia.»",
     "Perché il mare è salato? Perché ci hanno pisciato dentro i pesci per secoli.",
     "«Mamma, mi compri il gelato?» «No.» «E allora lo rubo.» «E allora compralo.»",
     "Un uomo va dal medico: «Dottore, quando mi alzo la mattina mi gira la testa.» "
@@ -72,18 +72,56 @@ BARZELLETTE = [
     "Perché le donne vivono più degli uomini? Perché non devono sposarsi con un uomo.",
     "«Pronto, è il 118? Mia moglie sta per partorire!» «Respiri, signore.» "
     "«E poi?» «E poi si calmi, non è lei che deve partorire.»",
-    "Un ubriaco entra in un bar alle 9 del mattino e chiede un bicchiere d'acqua. "
+    "Un ubriaco entra in un bar alle nove del mattino e chiede un bicchiere d'acqua. "
     "Il barista lo guarda: «Ti senti bene?»",
     "Perché l'italiano medio mette il sale nel caffè? Perché ha sentito che fa bene "
     "alla pressione e lui non si fida di nessuno.",
-    "«Come si chiama suo figlio?» «Mario, come il padre.» «E il padre come si chiama?» "
-    "«Mario.» «E suo marito?» «Mario.» «E lei?» «Maria.»",
+    "«Come si chiama suo figlio?» «Mario, come il padre.» «E il padre?» «Mario.» "
+    "«E suo marito?» «Mario.» «E lei?» «Maria.»",
     "Un uomo dice alla moglie: «Ho comprato una macchina nuova.» «E i soldi?» "
     "«Quelli li ho comprati dopo.»",
     "Perché il pesce non prende mai il raffreddore? Perché sta sempre in acqua e "
     "non si scopre.",
     "«Cameriere, c'è una mosca nel mio piatto.» «Normale, signore, il pesce è fresco.»",
+    "Pierino torna da scuola: «Mamma, oggi ho preso dieci!» «In cosa?» «In condotta, "
+    "però dieci.»",
+    "Un tizio in farmacia: «Avete qualcosa per l'insonnia?» «Sì, questo.» "
+    "«Funziona?» «Boh, io non lo uso mai.»",
+    "Perché il caffè è meglio del sesso? Perché dopo non devi fumare e non devi "
+    "chiamarlo il giorno dopo.",
+    "«Dottore, mia moglie crede di essere un frigorifero.» «E da quanto?» «Da quando "
+    "ha chiuso la porta e non parla più.»",
+    "Un siciliano a Milano: «Scusi, per il Duomo?» «Sempre dritto.» «E chi si ferma?»",
+    "Perché gli uomini amano le donne con il senso dell'umorismo? Perché così almeno "
+    "una delle due ride.",
+    "«Caro, mi trovi bella?» «Sì.» «E intelligente?» «Adesso non esageriamo.»",
+    "Un prete in motorino viene fermato: «Patente e libretto.» «Guardi che sono un "
+    "prete.» «E allora?» «E allora benedico la macchina.»",
+    "Perché il matrimonio è come un assedio? Perché chi sta fuori vuole entrare e "
+    "chi sta dentro vuole uscire.",
+    "«Cameriere, il vino sa di tappo.» «Signore, è il tappo.»",
+    "Un uomo al bar: «Un caffè e un bicchiere d'acqua.» «Per il caffè?» «No, per "
+    "il bicchiere.»",
+    "Perché a Napoli il mare è azzurro? Perché è tifoso.",
+    "«Mamma, papà è caduto dalle scale!» «Si è fatto male?» «No, è caduto "
+    "dall'ultimo gradino.»",
+    "Un tizio al telefono: «Pronto, parlo con l'idraulico?» «Sì.» «Ho il lavandino "
+    "otturato.» «E io che c'entro, mica l'ho otturato io.»",
+    "Perché gli italiani scrivono le ricette? Perché non si fidano di chi cucina "
+    "meglio di loro.",
+    "«Dottore, ho perso la memoria.» «E da quando?» «Da quando? Da quando cosa?»",
+    "Un uomo entra in banca: «Vorrei aprire un conto.» «Certo, quanto versa?» "
+    "«Un litro.»",
+    "Perché il gallo canta all'alba? Perché non ha il telefono e non può mettere "
+    "la sveglia.",
+    "«Caro, se morissi rifaresti il matrimonio?» «Con chi?» «Con te.» «Ah.»",
+    "Perché i pesci non giocano a calcio? Perché hanno paura del portiere "
+    "che è un polpo.",
+    "Un tizio al ristorante: «Cameriere, questo vino è tappato.» «Ma è acqua.» "
+    "«Appunto, è tappata.»",
 ]
+
+_ULTIMA = [""]
 
 
 class Add(StatesGroup):
@@ -520,29 +558,62 @@ def _pulisci(uid):
 
 
 # ==================== BARZELLETTE ====================
+def _barzelletta_interna():
+    """Pesca una barzelletta italiana diversa dall'ultima usata."""
+    if not BARZELLETTE:
+        return "..."
+    scelta = random.choice(BARZELLETTE)
+    for _ in range(8):
+        if scelta != _ULTIMA[0]:
+            break
+        scelta = random.choice(BARZELLETTE)
+    _ULTIMA[0] = scelta
+    return scelta
+
+
+def _da_json(dati):
+    """Estrae una battuta dai formati possibili del servizio."""
+    if isinstance(dati, dict):
+        elenco = dati.get("jokes")
+        if isinstance(elenco, list):
+            valide = [str(x).strip() for x in elenco if str(x).strip()]
+            if valide:
+                return random.choice(valide)
+        testo = (dati.get("joke") or dati.get("text") or dati.get("battuta") or "")
+        if not testo and dati.get("setup"):
+            testo = (str(dati["setup"]) + "\n\n"
+                     + str(dati.get("delivery") or dati.get("punchline") or ""))
+        if str(testo).strip():
+            return str(testo).strip()
+        return ""
+    if isinstance(dati, list) and dati:
+        primo = dati[0]
+        if isinstance(primo, str):
+            valide = [str(x).strip() for x in dati if str(x).strip()]
+            return random.choice(valide) if valide else ""
+        if isinstance(primo, dict):
+            testo = primo.get("joke") or primo.get("text") or ""
+            return str(testo).strip()
+    return ""
+
+
 async def _barzelletta():
     url = (await db.get_setting("joke_api") or "").strip()
-    if url:
-        try:
-            timeout = aiohttp.ClientTimeout(total=6)
-            async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.get(url) as r:
-                    if r.status == 200:
-                        dati = await r.json(content_type=None)
-                        testo = ""
-                        if isinstance(dati, dict):
-                            testo = (dati.get("joke") or dati.get("text")
-                                     or dati.get("battuta") or "")
-                            if not testo and dati.get("setup"):
-                                testo = (str(dati["setup"]) + "\n\n"
-                                         + str(dati.get("punchline") or ""))
-                        elif isinstance(dati, list) and dati and isinstance(dati[0], dict):
-                            testo = dati[0].get("joke") or dati[0].get("text") or ""
-                        if testo.strip():
-                            return testo.strip()
-        except Exception as e:
-            print(f"barzelletta: {type(e).__name__}: {e}")
-    return random.choice(BARZELLETTE)
+    if not url:
+        return _barzelletta_interna()
+    try:
+        timeout = aiohttp.ClientTimeout(total=6)
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(url) as r:
+                if r.status == 200:
+                    dati = await r.json(content_type=None)
+                    testo = _da_json(dati)
+                    if testo:
+                        _ULTIMA[0] = testo
+                        return testo
+    except Exception as e:
+        print(f"barzelletta: {type(e).__name__}: {e}")
+    return _barzelletta_interna()
 
 
 async def _risposta_tag(msg):
@@ -1481,12 +1552,14 @@ async def _joke_text():
     api = _esc(await db.get_setting("joke_api"))
     testo = _esc(await db.get_setting("joke_testo"))
     return ("<b>🤡 Barzellette sul tag</b>\n\n"
-            "Quando il bot viene taggato nel gruppo risponde con una barzelletta e poi "
+            "Quando il bot viene taggato nel gruppo risponde con una battuta e poi "
             "con la frase finale.\n\n"
-            f"Stato: <b>{'ATTIVE' if acceso else 'SPENTE'}</b>\n\n"
+            f"Stato: <b>{'ATTIVE' if acceso else 'SPENTE'}</b>\n"
+            f"Riserva interna: <b>{len(BARZELLETTE)}</b> battute in italiano\n\n"
             f"<b>Frase finale</b>\n{testo}\n\n"
-            f"<b>Servizio</b>\n<code>{api}</code>\n\n"
-            "Se il servizio non risponde, il bot usa barzellette interne.")
+            f"<b>Servizio esterno</b>\n{api or 'nessuno (solo riserva interna)'}\n\n"
+            "Servizio predefinito: archivio Battute.json su GitHub, in italiano. "
+            "Se non risponde, il bot usa la riserva interna.")
 
 
 async def _joke_kb():
@@ -1495,7 +1568,7 @@ async def _joke_kb():
         [InlineKeyboardButton(text=("⛔ Spegni barzellette" if acceso else "✅ Accendi barzellette"),
                               callback_data="j:toggle")],
         [InlineKeyboardButton(text="✏️ Frase finale", callback_data="j:testo")],
-        [InlineKeyboardButton(text="🌐 Indirizzo servizio", callback_data="j:api")],
+        [InlineKeyboardButton(text="🌐 Servizio esterno", callback_data="j:api")],
         [InlineKeyboardButton(text="🎲 Prova ora", callback_data="j:prova")],
         [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:set")],
         [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
@@ -1534,10 +1607,11 @@ async def cb_joke_act(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
         await state.set_state(SetTxt.joke_api)
         return await _edit(cb.message,
-                           "Mandami l'indirizzo del servizio barzellette.\n\n"
-                           "Deve restituire JSON con il campo <code>joke</code>. "
-                           "Scrivi <code>-</code> per usare solo la lista interna." + HINT,
-                           kb.nav("a:joke"))
+                           "Mandami l'indirizzo di un servizio di battute <b>in italiano</b>, "
+                           "oppure <code>-</code> per usare solo la riserva interna.\n\n"
+                           "Formati accettati: campo <code>joke</code>, campo <code>jokes</code> "
+                           "con elenco, o elenco diretto. Attuale predefinito: archivio "
+                           "Battute.json." + HINT, kb.nav("a:joke"))
     await cb.answer("Azione sconosciuta", show_alert=True)
 
 
@@ -1559,7 +1633,7 @@ async def set_joke_api(msg: Message, state: FSMContext):
                                 reply_markup=kb.nav("a:joke"))
     await db.set_setting("joke_api", "" if t == "-" else t)
     await state.clear()
-    await msg.answer("Servizio aggiornato." if t != "-" else "Uso solo la lista interna.",
+    await msg.answer("Servizio aggiornato." if t != "-" else "Uso solo la riserva interna.",
                      reply_markup=await _joke_kb())
 
 
