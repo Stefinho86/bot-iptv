@@ -477,13 +477,13 @@ async def revoke(aid):
 
 
 _FILTRI = {
-    "all": "TRUE",
+    "all": "($1::timestamptz IS NOT NULL)",
     "attesa": ("NOT revoked AND thanked_at IS NULL AND thanks_deadline IS NOT NULL "
                "AND thanks_deadline > $1"),
-    "ok": "thanked_at IS NOT NULL",
+    "ok": "($1::timestamptz IS NOT NULL) AND thanked_at IS NOT NULL",
     "ko": ("NOT revoked AND thanked_at IS NULL AND thanks_deadline IS NOT NULL "
            "AND thanks_deadline <= $1"),
-    "rev": "revoked",
+    "rev": "($1::timestamptz IS NOT NULL) AND revoked",
 }
 
 
@@ -502,13 +502,13 @@ async def assignments_stats():
 
 
 async def count_assignments(filtro="all"):
-    cond = _FILTRI.get(filtro, "TRUE")
+    cond = _FILTRI.get(filtro, _FILTRI["all"])
     async with _pool.acquire() as c:
         return await c.fetchval(f"SELECT COUNT(*) FROM assignments WHERE {cond}", now())
 
 
 async def assignments_page(offset, limit, filtro="all"):
-    cond = _FILTRI.get(filtro, "TRUE")
+    cond = _FILTRI.get(filtro, _FILTRI["all"])
     async with _pool.acquire() as c:
         return await c.fetch(
             "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
