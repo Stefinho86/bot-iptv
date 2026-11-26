@@ -50,6 +50,18 @@ DEFAULTS = {
     "group_only": "1",
     "group_link": "",
     "thanks_min": "10",
+    "silenzio_on": "0",
+    "silenzio_da": "00:00",
+    "silenzio_a": "07:00",
+    "sil_g_liste": "1",
+    "sil_g_ringraziamenti": "1",
+    "sil_g_conferme": "1",
+    "sil_g_barzellette": "0",
+    "sil_p_libere": "1",
+    "sil_p_liste": "1",
+    "sil_p_conferme": "1",
+    "sil_n_avvisi": "1",
+    "sil_n_punizioni": "1",
     "punizione": "ammonizione",
     "pun_gruppo": ("⚠️ {user} — non hai rispettato il regolamento del gruppo: "
                    "non hai ringraziato entro {minuti} minuti.\n\n"
@@ -67,9 +79,6 @@ DEFAULTS = {
     "joke_api": "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json",
     "joke_testo": ("Coglionazzo! 😂❤️\n"
                    "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
-    "silenzio_on": "0",
-    "silenzio_da": "00:00",
-    "silenzio_a": "07:00",
     "welcome": ("👋 Ciao {name}!\n\n"
                 "Benvenuto nel canale liste. 🎬\n"
                 "Premi il pulsante qui sotto per ricevere la tua lista IPTV: "
@@ -466,6 +475,28 @@ async def assignments(limit=20):
 async def count_assignments():
     async with _pool.acquire() as c:
         return await c.fetchval("SELECT COUNT(*) FROM assignments")
+
+
+async def assignments_page(offset, limit):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
+            "JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
+            "ORDER BY a.id DESC OFFSET $1 LIMIT $2", offset, limit)
+
+
+async def assignments_stats():
+    async with _pool.acquire() as c:
+        r = await c.fetchrow(
+            "SELECT "
+            " COUNT(*) FILTER (WHERE thanked_at IS NOT NULL) AS si, "
+            " COUNT(*) FILTER (WHERE revoked) AS rev, "
+            " COUNT(*) FILTER (WHERE NOT revoked AND thanked_at IS NULL "
+            "   AND thanks_deadline IS NOT NULL AND thanks_deadline <= now()) AS no, "
+            " COUNT(*) FILTER (WHERE NOT revoked AND thanked_at IS NULL "
+            "   AND thanks_deadline > now()) AS attesa "
+            "FROM assignments")
+    return dict(r)
 
 
 async def revoke(aid):
