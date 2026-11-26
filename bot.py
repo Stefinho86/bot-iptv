@@ -24,6 +24,7 @@ USER_CMDS = [
 ]
 ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin", description="Pannello admin"),
+    BotCommand(command="orario", description="Fascia silenzio nel gruppo"),
     BotCommand(command="stato", description="Diagnostica"),
     BotCommand(command="aggiungi", description="Aggiungi lista"),
     BotCommand(command="liberi", description="Liste libere"),
@@ -40,7 +41,6 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="cooldown", description="Imposta giorni"),
     BotCommand(command="setgroup", description="Imposta gruppo"),
     BotCommand(command="setlink", description="Imposta link gruppo"),
-    BotCommand(command="orario", description="Fascia di silenzio"),
     BotCommand(command="verifica", description="Riverifica admin"),
     BotCommand(command="deverifica", description="Revoca verifica"),
     BotCommand(command="toggle", description="Accendi o spegni"),
@@ -303,4 +303,4 @@ async def supervisor():
 
 
 if __name__ == "__main__":
-    asyncio.run(supervisor())
+    supervisor_entry = asyncio.run(supervisor())
