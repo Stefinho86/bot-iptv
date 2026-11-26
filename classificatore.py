@@ -7,8 +7,9 @@ SALUTO = re.compile(r"\b(ciao|salve|buongiorno|buonasera|buon pomeriggio|hey|ehi
 RICHIESTA = re.compile(r"\b(lista|liste|link|m3u|iptv|posso|vorrei|mi dai|mi mandi|mandi|"
                        r"serve|avrei|dammi|consegna|nuova|altro|altra|ancora|riprovo)\b", re.I)
 ALTRA = re.compile(r"\b(altra|altro|nuova|nuovo|ancora|seconda|riprovo|rifaccio)\b", re.I)
-NEGAZIONE = re.compile(r"\b(non funziona|non va|non parte|non si vede|non carica|"
-                       r"buona a niente|schifo|rotto|rotta|errore|problema|scaduta)\b", re.I)
+NEGAZIONE = re.compile(r"\b(non funziona|non va|non parte|non si vede|non carica|non apre|"
+                       r"buona a niente|schifo|rotto|rotta|errore|problema|scaduta|"
+                       r"bloccata|si blocca)\b", re.I)
 
 
 def risposta_al_bot(msg, bot):
@@ -27,10 +28,11 @@ async def classifica(msg, bot, testo, ha_attesa):
 
     Ordine delle priorità, quando c'è un'attesa aperta:
     1. foto o file -> ringraziamento (è lo screenshot)
-    2. "grazie" senza richiesta di un'altra lista -> ringraziamento
-    3. "non funziona", "scaduta", "errore" -> reclamo
-    4. richiesta di lista -> richiesta, anche se c'è "grazie" davanti
+    2. negazione ("non funziona", "scaduta", "errore") -> reclamo, vince anche su "grazie"
+    3. "grazie" senza richiesta di un'altra lista -> ringraziamento
+    4. richiesta di lista -> richiesta
     5. complimento -> ringraziamento
+    6. saluto -> saluto
     """
 
     t = (testo or "").strip()
@@ -49,10 +51,10 @@ async def classifica(msg, bot, testo, ha_attesa):
     negazione = bool(NEGAZIONE.search(t))
 
     if ha_attesa:
+        if negazione:
+            return "reclamo"
         if grazie and not (altra and richiesta):
             return "ringraziamento"
-        if negazione and not (altra and richiesta):
-            return "reclamo"
         if richiesta:
             return "richiesta"
         if bonta or grazie:
@@ -61,7 +63,7 @@ async def classifica(msg, bot, testo, ha_attesa):
             return "saluto"
         return "ambiguo"
 
-    if negazione and not grazie:
+    if negazione:
         return "reclamo"
     if richiesta:
         return "richiesta"
