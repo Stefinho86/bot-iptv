@@ -19,8 +19,10 @@ from aiogram.types import (Message, CallbackQuery, FSInputFile,
                            InlineKeyboardMarkup, InlineKeyboardButton,
                            LinkPreviewOptions)
 
+import classificatore as clf
 import db
 import config
+import orario
 import utils as kb
 from services import detect, detect_many, ocr_bytes, preview, test_list
 from utils import IsAdmin, Trigger, NotCommand, AnonUnverified, Ringrazia
@@ -51,6 +53,7 @@ HINT = "\n\nScrivi /annulla per interrompere."
 MAX_ANTEPRIMA = 15
 PER_PAGE = 10
 PER_PAGE_MAN = 8
+PER_HIST = 8
 
 NONMOD = object()
 
@@ -152,6 +155,11 @@ class SetTxt(StatesGroup):
     joke_api = State()
 
 
+class SetOrario(StatesGroup):
+    inizio = State()
+    fine = State()
+
+
 class Ask(StatesGroup):
     wait = State()
 
@@ -194,11 +202,13 @@ def _human(delta):
     return " ".join(out) or "pochi minuti"
 
 
-def _quadro(s):
+async def _quadro(s):
+    fascia = "IN CORSO" if await orario.in_finestra() else ("attiva" if await orario.attiva() else "spenta")
     return (f"<b>Pannello admin</b>\n\n"
             f"📋 Libere: {s['free']} · 📤 Assegnate: {s['assigned']}\n"
             f"👤 Utenti: {s['users']} · 🛡 Admin: {s['admins']} · 👑 Proprietario: {s['super']}\n"
-            f"🚫 Bannati: {s['banned']}\n\n"
+            f"🚫 Bannati: {s['banned']}\n"
+            f"🔕 Fascia: {fascia}\n\n"
             f"🕐 {_ora(dt.datetime.now(dt.timezone.utc))}")
 
 
@@ -210,6 +220,8 @@ async def _statistiche_text():
     cool = await db.get_int("cooldown_days")
     minuti = await db.get_int("thanks_min")
     punizione = _esc(await db.get_setting("punizione"))
+    fascia = ("IN CORSO" if await orario.in_finestra()
+              else ("attiva" if await orario.attiva() else "spenta"))
     return ("<b>📊 Statistiche</b>\n\n"
             f"📋 Liste libere: <b>{s['free']}</b>\n"
             f"📤 Liste assegnate: <b>{s['assigned']}</b>\n"
@@ -220,6 +232,7 @@ async def _statistiche_text():
             f"👥 Gruppo: <code>{gid or 'non impostato'}</code>\n"
             f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF (tutti passano)'}\n"
             f"⚡ Bot: {'ATTIVO' if en else 'SPENTO'}\n"
+            f"🔕 Fascia di silenzio: {fascia}\n"
             f"⏳ Attesa: {cool} giorni · ⏱ Ringraziamento: {minuti} min\n"
             f"⚖️ Punizione: {punizione}\n\n"
             f"🕐 {_ora(dt.datetime.now(dt.timezone.utc))}")
@@ -256,17 +269,27 @@ def _comandi_text():
             "/stato - diagnostica di gruppo, filtro e bot\n"
             "/comandi - questo elenco\n"
             "/cooldown - giorni di attesa tra due liste\n"
+            "/orario - fascia di silenzio del bot\n"
             "/setgroup - gruppo autorizzato\n"
             "/setlink - link d'invito del gruppo\n"
             "/toggle - accendi o spegni il bot\n"
             "/annulla - interrompi l'operazione in corso\n\n"
+            "<b>⚡ Accendi / spegni</b>\n"
+            "È un interruttore manuale immediato: con il bot spento ignora "
+            "ringraziamenti, richieste e barzellette, ma i comandi admin restano "
+            "attivi. Serve per manutenzione o test. È diverso dalla fascia oraria, "
+            "che è automatica e ricorrente.\n\n"
+            "<b>🔕 Fascia di silenzio</b>\n"
+            "Fascia oraria in cui il gruppo è chiuso. Il bot legge comunque i "
+            "ringraziamenti, li registra, non punisce e conferma in privato. "
+            "Si imposta con /orario.\n\n"
             "<b>✏️ Personalizzazione</b>\n"
             "Impostazioni → Frasi per l'utente: testi inviati agli utenti e minuti per "
             "ringraziare.\n"
             "Impostazioni → Punizione mancato ringraziamento: cosa scrivere nel gruppo e "
             "agli admin quando il ringraziamento non arriva.\n"
-            "Impostazioni → Barzellette sul tag: barzelletta quando il bot viene taggato "
-            "nel gruppo.\n"
+            "Impostazioni → Barzellette sul tag: barzelletta quando viene chiesta una "
+            "lista nel gruppo.\n"
             "Pannello → Ringraziamenti manuali: segna a mano un ringraziamento.\n\n"
             "Tutti i comandi sugli utenti accettano ID, @username o inoltro.")
 
@@ -292,7 +315,7 @@ def _utente(r):
 
 def _pulisci_user(nome):
     n = (nome or "").strip().lstrip("@").strip()
-    n = re.sub(r"[^0-9A-Za-z_]", "", n)
+    n = re.sub(r"[-9A-Za-z_]", "", n)
     return n[:32]
 
 
@@ -424,6 +447,34 @@ async def _avvisa(cb, e):
         pass
 
 
+async def _rispondi(msg, testo, kbd=None, foto=None):
+    """Risponde nel gruppo, oppure in privato se la fascia di silenzio e' attiva:
+    nel gruppo il messaggio verrebbe cancellato dal bot di sicurezza."""
+    in_gruppo = msg.chat.type in ("group", "supergroup")
+    if in_gruppo and await orario.in_finestra():
+        try:
+            if foto:
+                await msg.bot.send_photo(msg.from_user.id, FSInputFile(foto),
+                                         caption=testo, reply_markup=kbd,
+                                         link_preview_options=NO_PREVIEW)
+            else:
+                await msg.bot.send_message(msg.from_user.id, testo, reply_markup=kbd,
+                                           link_preview_options=NO_PREVIEW)
+            return True
+        except Exception as e:
+            print(f"risposta privata: {type(e).__name__}: {e}")
+    try:
+        if foto:
+            await msg.answer_photo(FSInputFile(foto), caption=testo, reply_markup=kbd,
+                                   link_preview_options=NO_PREVIEW)
+        else:
+            await msg.answer(testo, reply_markup=kbd, link_preview_options=NO_PREVIEW)
+        return True
+    except Exception as e:
+        print(f"risposta: {type(e).__name__}: {e}")
+        return False
+
+
 def _forwarded_uid(msg):
     fo = getattr(msg, "forward_origin", None)
     if fo is not None:
@@ -479,6 +530,8 @@ async def _stato_text(msg, bot):
     gid = await db.get_group_id()
     gonly = await db.get_int("group_only")
     en = await db.get_int("enabled")
+    fascia = ("IN CORSO" if await orario.in_finestra()
+              else ("attiva" if await orario.attiva() else "spenta"))
     if msg.from_user.id == kb.ANON_ID:
         who = await db.get_anon_verified(msg.chat.id)
         tu = f"verificato come <code>{who}</code>" if who else "NON verificato"
@@ -490,7 +543,8 @@ async def _stato_text(msg, bot):
             tu = f"errore lettura membri: {type(e).__name__}"
     return (f"Gruppo configurato: <code>{gid}</code>\n"
             f"Filtro gruppo: {'ON' if gonly else 'OFF (tutti passano)'}\n"
-            f"Bot: {'attivo' if en else 'spento'}\nTu: {tu}\n"
+            f"Bot: {'attivo' if en else 'spento'}\n"
+            f"Fascia di silenzio: {fascia}\nTu: {tu}\n"
             f"Ora server: {_ora(dt.datetime.now(dt.timezone.utc))} (Europe/Rome)")
 
 
@@ -621,15 +675,15 @@ async def _barzelletta():
     return _barzelletta_interna()
 
 
-async def _risposta_tag(msg):
+async def _risposta_tag(msg, nome=None):
     """Barzelletta + invito in privato. False se le barzellette sono spente."""
     if await db.get_int("joke_on") == 0:
         return False
     battuta = await _barzelletta()
     coda = _fmt(await db.get_setting("joke_testo"),
-                name=_esc(msg.from_user.first_name or "bello"))
+                name=_esc(nome or msg.from_user.first_name or "bello"))
     try:
-        await msg.reply(f"{battuta}\n\n{coda}", link_preview_options=NO_PREVIEW)
+        await _rispondi(msg, f"{battuta}\n\n{coda}")
     except Exception as e:
         print(f"risposta_tag: {type(e).__name__}: {e}")
         return False
@@ -912,8 +966,8 @@ async def _man_utenti(cb, page):
             bottoni.append([InlineKeyboardButton(
                 text=f"{nome} · {utente} · {r['tot']}",
                 callback_data=f"a:manu:{r['user_id']}:{page}")])
-        sinistra = f"a:man:{page - 1}:{page}" if page > 0 else "a:noop"
-        destra = f"a:man:{page + 1}:{page}" if page + 1 < pagine else "a:noop"
+        sinistra = f"a:man:{page - 1}" if page > 0 else "a:noop"
+        destra = f"a:man:{page + 1}" if page + 1 < pagine else "a:noop"
         bottoni.append([
             InlineKeyboardButton(text="◀️" if page > 0 else "·", callback_data=sinistra),
             InlineKeyboardButton(text=f"pag. {page + 1}/{pagine}", callback_data="a:noop"),
@@ -947,7 +1001,7 @@ async def cb_man_utente(cb: CallbackQuery):
                      f"L#{r['list_id']} {r['kind']}",
                 callback_data=f"a:manl:{r['id']}:{uid}")])
         bottoni.append([InlineKeyboardButton(text="⬅️ Indietro",
-                                            callback_data=f"a:man:{page}:{page}")])
+                                            callback_data=f"a:man:{page}")])
         bottoni.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
         chi = _nome(utente) if utente else str(uid)
         await cb.answer()
@@ -1095,7 +1149,7 @@ async def start_verify(msg: Message, command: CommandObject, bot: Bot):
 async def start(msg: Message, bot: Bot):
     await db.touch_user(msg.from_user.id, msg.from_user.username, msg.from_user.full_name)
     if await kb.is_admin_event(msg):
-        return await msg.answer(_quadro(await db.stats()), reply_markup=kb.admin_menu())
+        return await msg.answer(await _quadro(await db.stats()), reply_markup=kb.admin_menu())
     if not await kb.member_ok(bot, msg.from_user.id):
         return await msg.answer(await kb.not_member_text(), reply_markup=await kb.join_kb())
     await _welcome(msg)
@@ -1129,6 +1183,8 @@ async def cb_get(cb: CallbackQuery, bot: Bot):
 
 @user_router.message(Ringrazia())
 async def thanks(msg: Message, bot: Bot):
+    if await db.get_int("enabled") == 0:
+        return
     row = await db.pending_thanks(msg.from_user.id)
     if not row:
         return
@@ -1138,10 +1194,7 @@ async def thanks(msg: Message, bot: Bot):
     await db.log(msg.from_user.id, "thanks", f"lista {row['list_id']}")
     nome = msg.from_user.first_name or "utente"
     testo = _fmt(await db.get_setting("ph_ok"), name=_esc(nome), bot=await _bot_tag(bot))
-    try:
-        await msg.reply(testo, link_preview_options=NO_PREVIEW)
-    except Exception:
-        pass
+    await _rispondi(msg, testo)
 
 
 @user_router.message(Trigger(), Command("lista"))
@@ -1149,17 +1202,47 @@ async def cmd_lista(msg: Message, bot: Bot):
     await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
 
 
-@user_router.message(Trigger(), F.text)
+@user_router.message(Trigger(), F.text | F.photo | F.sticker)
 async def mention_any(msg: Message, bot: Bot):
-    if msg.chat.type != "private":
-        if await _risposta_tag(msg):
-            return
+    """Nel privato: sempre consegna. Nel gruppo: il classificatore decide.
+
+    Barzelletta e invito in privato solo su richiesta lista, non sui ringraziamenti.
+    """
+    if msg.chat.type == "private":
+        return await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
+    if await db.get_int("enabled") == 0:
+        return
+    testo = msg.text or msg.caption or ""
+    risposta = bool(msg.reply_to_message and msg.reply_to_message.from_user
+                    and msg.reply_to_message.from_user.id == bot.id)
+    tipo = clf.classifica(
+        testo,
+        foto=bool(msg.photo),
+        sticker=bool(msg.sticker),
+        risposta_al_bot=risposta,
+        solo_emoji=bool(testo) and not any(c.isalnum() for c in testo))
+
+    if tipo == clf.THANKS:
+        if await db.pending_thanks(msg.from_user.id):
+            return await thanks(msg, bot)
+        nome = msg.from_user.first_name or "utente"
+        testo_ok = _fmt(await db.get_setting("ph_ok"), name=_esc(nome),
+                        bot=await _bot_tag(bot))
+        return await _rispondi(msg, testo_ok)
+
+    if tipo == clf.REQUEST:
+        await _risposta_tag(msg)
+        return await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
+
+    # tag o risposta generica: barzelletta e consegna
+    await _risposta_tag(msg)
     await deliver(msg, msg.from_user, bot, await kb.is_admin_event(msg))
 
 
 async def _controlla_ringraziamento(bot, uid, aid, minuti, nome, username):
     try:
         await asyncio.sleep(max(1, minuti) * 60)
+        await orario.attesa_riapertura()
         row = await db.get_assignment(aid)
         if not row or row["thanked_at"] or row["revoked"]:
             return
@@ -1184,7 +1267,7 @@ async def _avvisa_punizione(bot, uid, row, minuti, nome, username):
               "quando": _ora(dt.datetime.now(dt.timezone.utc))}
 
     gid = await db.get_group_id()
-    if gid:
+    if gid and not await orario.in_finestra():
         try:
             await bot.send_message(gid, _fmt(await db.get_setting("pun_gruppo"), **valori),
                                    link_preview_options=NO_PREVIEW)
@@ -1279,19 +1362,16 @@ async def deliver(msg, user, bot, adm=False):
                    f"{_payload_text(chosen['kind'], payload)}\n\n"
                    f"Prossima lista: <b>{_ora(exp)}</b>\n\n"
                    f"{frase}")
-        if shot and await db.get_int("send_proof") == 1:
-            await msg.answer_photo(FSInputFile(shot), caption=caption,
-                                   link_preview_options=NO_PREVIEW)
+        foto = shot if (shot and await db.get_int("send_proof") == 1) else None
+        await _rispondi(msg, caption, None, foto)
+        if shot:
             shot.unlink(missing_ok=True)
-        else:
-            await msg.answer(caption, link_preview_options=NO_PREVIEW)
 
         if deadline:
             avviso = _fmt(await db.get_setting("ph_richiesta"),
                           name=_esc(nome), minuti=minuti, bot=bot_tag,
                           group=(await db.get_setting("group_link") or ""))
-            await msg.answer(avviso, reply_markup=await kb.join_kb(),
-                             link_preview_options=NO_PREVIEW)
+            await _rispondi(msg, avviso, await kb.join_kb())
             asyncio.create_task(
                 _controlla_ringraziamento(bot, uid, aid, minuti, nome, user.username))
     finally:
@@ -1302,7 +1382,7 @@ async def deliver(msg, user, bot, adm=False):
 @admin_router.message(Command("admin"))
 async def panel(msg: Message, state: FSMContext):
     await state.clear()
-    await msg.answer(_quadro(await db.stats()), reply_markup=kb.admin_menu())
+    await msg.answer(await _quadro(await db.stats()), reply_markup=kb.admin_menu())
 
 
 @admin_router.message(Command("stato"))
@@ -1345,7 +1425,7 @@ async def cb_menu(cb: CallbackQuery, state: FSMContext):
     _pulisci(cb.from_user.id)
     await state.clear()
     await cb.answer()
-    await _edit(cb.message, _quadro(await db.stats()), kb.admin_menu())
+    await _edit(cb.message, await _quadro(await db.stats()), kb.admin_menu())
 
 
 @admin_router.callback_query(F.data == "a:stats")
@@ -1382,7 +1462,7 @@ async def cb_revoca(cb: CallbackQuery, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
     await _edit(cb.message, "Quale assegnazione vuoi revocare? Mandami il numero "
-                            "(lo trovi in Assegnazioni)." + HINT, kb.nav("a:hist"))
+                            "(lo trovi in Assegnazioni)." + HINT, kb.nav("a:hist:all:0"))
 
 
 @admin_router.callback_query(F.data == "a:reset")
@@ -1419,7 +1499,136 @@ async def cb_toggle(cb: CallbackQuery):
     await cb.answer()
     cur = await db.get_int("enabled")
     await db.set_setting("enabled", "0" if cur else "1")
-    await _edit(cb.message, f"Bot {'SPENTO' if cur else 'ATTIVO'}.", kb.admin_menu())
+    if cur:
+        testo = ("🔴 <b>Bot spento</b>\n\n"
+                 "Interruttore manuale: ringraziamenti, richieste e barzellette sono "
+                 "ignorati. I comandi admin restano attivi.\n\n"
+                 "Diverso dalla fascia oraria, che è automatica.")
+    else:
+        testo = ("🟢 <b>Bot attivo</b>\n\n"
+                 "Elaborazione normale ripristinata.")
+    await _edit(cb.message, testo + "\n\nPannello:", kb.admin_menu())
+
+
+# ==================== FASCIA DI SILENZIO ====================
+async def _orario_text():
+    return (await orario.descrizione() +
+            "\n\n<b>Come funziona</b>\n"
+            "In questa fascia il gruppo è chiuso e il bot di sicurezza cancella i "
+            "messaggi. Il bot li riceve lo stesso: registra i ringraziamenti, non "
+            "punisce e conferma in privato. Le punizioni sospese slittano alla "
+            "riapertura.")
+
+
+def _orario_kb(attivi, dm, sospendi, acceso):
+    righe = [
+        [InlineKeyboardButton(text=("🔴 Disattiva fascia" if acceso else "🟢 Attiva fascia"),
+                              callback_data="o:toggle")],
+        [InlineKeyboardButton(text=f"🕛 Inizio {_orario_cache['start']}", callback_data="o:inizio"),
+         InlineKeyboardButton(text=f"🕖 Fine {_orario_cache['end']}", callback_data="o:fine")],
+    ]
+    giorni = [InlineKeyboardButton(
+        text=("✅" if i in attivi else "▫️") + nome, callback_data=f"o:g:{i}")
+        for i, nome in enumerate(orario.GIORNI)]
+    righe += [giorni[0:4], giorni[4:7]]
+    righe += [
+        [InlineKeyboardButton(text=f"✉️ Conferma in privato: {'sì' if dm else 'no'}",
+                              callback_data="o:dm"),
+         InlineKeyboardButton(text=f"⚖️ Punizioni: {'sospese' if sospendi else 'attive'}",
+                              callback_data="o:pun")],
+        [InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:set")],
+        [InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=righe)
+
+
+_orario_cache = {"start": "00:00", "end": "07:00"}
+
+
+async def _orario_render(cb=None, msg=None):
+    _orario_cache["start"] = await db.get_setting("sleep_start") or "00:00"
+    _orario_cache["end"] = await db.get_setting("sleep_end") or "07:00"
+    kbd = _orario_kb(await orario.giorni(), await orario.conferma_privato(),
+                     await orario.sospendi_punizioni(), await orario.attiva())
+    testo = await _orario_text()
+    if cb is not None:
+        await _edit(cb.message, testo, kbd)
+    else:
+        await msg.answer(testo, reply_markup=kbd)
+
+
+@admin_router.message(Command("orario"))
+async def orario_cmd(msg: Message, state: FSMContext):
+    await state.clear()
+    await _orario_render(msg=msg)
+
+
+@admin_router.callback_query(F.data == "a:orario")
+async def cb_orario(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    await state.clear()
+    await _orario_render(cb=cb)
+
+
+@admin_router.callback_query(F.data.startswith("o:"))
+async def cb_orario_act(cb: CallbackQuery, state: FSMContext):
+    cosa = cb.data.split(":")[1]
+    if cosa == "toggle":
+        await cb.answer()
+        await db.set_setting("sleep_on", "0" if await orario.attiva() else "1")
+        return await _orario_render(cb=cb)
+    if cosa == "dm":
+        await cb.answer()
+        await db.set_setting("sleep_dm", "0" if await orario.conferma_privato() else "1")
+        return await _orario_render(cb=cb)
+    if cosa == "pun":
+        await cb.answer()
+        await db.set_setting("sleep_no_punish",
+                             "0" if await orario.sospendi_punizioni() else "1")
+        return await _orario_render(cb=cb)
+    if cosa == "g":
+        await cb.answer()
+        g = await orario.giorni()
+        g.symmetric_difference_update({int(cb.data.split(":")[2])})
+        await db.set_setting("sleep_days", ",".join(str(i) for i in sorted(g)) or "0")
+        return await _orario_render(cb=cb)
+    if cosa == "inizio":
+        await cb.answer()
+        await state.set_state(SetOrario.inizio)
+        attuale = await db.get_setting("sleep_start")
+        return await _edit(cb.message,
+                           f"Mandami l'orario di <b>inizio</b> in formato <code>HH:MM</code>.\n"
+                           f"Attuale: <b>{attuale}</b>" + HINT, kb.nav("a:orario"))
+    if cosa == "fine":
+        await cb.answer()
+        await state.set_state(SetOrario.fine)
+        attuale = await db.get_setting("sleep_end")
+        return await _edit(cb.message,
+                           f"Mandami l'orario di <b>fine</b> in formato <code>HH:MM</code>.\n"
+                           f"Attuale: <b>{attuale}</b>" + HINT, kb.nav("a:orario"))
+    await cb.answer("Azione sconosciuta", show_alert=True)
+
+
+@admin_router.message(SetOrario.inizio)
+async def set_inizio(msg: Message, state: FSMContext):
+    valore = (msg.text or "").strip()
+    if not orario.HHMM.match(valore):
+        return await msg.answer("Formato non valido, usa <code>HH:MM</code>.",
+                                reply_markup=kb.nav("a:orario"))
+    await db.set_setting("sleep_start", valore)
+    await state.clear()
+    await msg.answer(f"Inizio fascia: <b>{valore}</b>", reply_markup=kb.nav("a:orario"))
+
+
+@admin_router.message(SetOrario.fine)
+async def set_fine(msg: Message, state: FSMContext):
+    valore = (msg.text or "").strip()
+    if not orario.HHMM.match(valore):
+        return await msg.answer("Formato non valido, usa <code>HH:MM</code>.",
+                                reply_markup=kb.nav("a:orario"))
+    await db.set_setting("sleep_end", valore)
+    await state.clear()
+    await msg.answer(f"Fine fascia: <b>{valore}</b>", reply_markup=kb.nav("a:orario"))
 
 
 # ==================== FRASI PER L'UTENTE ====================
@@ -1575,10 +1784,13 @@ async def _pun_text():
     destinatari = set(config.SUPER_ADMINS)
     for r in await db.all_admins():
         destinatari.add(r["user_id"])
+    fascia = ("in corso, quindi il messaggio nel gruppo slitta alla riapertura"
+              if await orario.in_finestra() else "fuori fascia")
     return ("<b>⚖️ Punizione per mancato ringraziamento</b>\n\n"
             "Allo scadere dei minuti il bot non lancia comandi a bot esterni: avvisa nel "
             "gruppo l'utente e manda un privato a tutti gli admin e superadmin, che "
             "applicano la punizione a mano.\n\n"
+            f"Fascia di silenzio: {fascia}.\n\n"
             f"<b>Punizione impostata</b>\n{punizione}\n\n"
             f"<b>Messaggio nel gruppo</b>\n{gruppo}\n\n"
             f"<b>Messaggio agli admin</b>\n{admin}\n\n"
@@ -1689,8 +1901,8 @@ async def _joke_text():
     api = _esc(await db.get_setting("joke_api"))
     testo = _esc(await db.get_setting("joke_testo"))
     return ("<b>🤡 Barzellette sul tag</b>\n\n"
-            "Quando il bot viene taggato nel gruppo risponde con una battuta e poi "
-            "con la frase finale.\n\n"
+            "Quando un utente <b>chiede una lista</b> nel gruppo, il bot risponde con "
+            "una battuta e poi con la frase finale. Sui ringraziamenti non parte.\n\n"
             f"Stato: <b>{'ATTIVE' if acceso else 'SPENTE'}</b>\n"
             f"Riserva interna: <b>{len(BARZELLETTE)}</b> battute in italiano\n\n"
             f"<b>Frase finale</b>\n{testo}\n\n"
@@ -1878,7 +2090,7 @@ async def add_cancel(cb: CallbackQuery, state: FSMContext):
     await cb.answer("Annullato")
     _pulisci(cb.from_user.id)
     await state.clear()
-    await _edit(cb.message, _quadro(await db.stats()), kb.admin_menu())
+    await _edit(cb.message, await _quadro(await db.stats()), kb.admin_menu())
 
 
 @admin_router.callback_query(F.data.startswith("a:b:"))
@@ -1888,7 +2100,7 @@ async def cb_back(cb: CallbackQuery, state: FSMContext):
     if dest == "menu":
         _pulisci(cb.from_user.id)
         await state.clear()
-        return await _edit(cb.message, _quadro(await db.stats()), kb.admin_menu())
+        return await _edit(cb.message, await _quadro(await db.stats()), kb.admin_menu())
     if dest == "kinds":
         _pulisci(cb.from_user.id)
         await state.clear()
@@ -1898,7 +2110,7 @@ async def cb_back(cb: CallbackQuery, state: FSMContext):
         return await _edit(cb.message, "Impostazioni", await _settings_kb())
     if dest == "hist":
         await state.clear()
-        return await _hist(cb.message, edit=True)
+        return await _hist(cb.message, "all", 0, edit=True)
     if dest == "xserver":
         await state.set_state(Add.x_server)
         testo = ("Mandami indirizzo e porta del pannello.\n\n"
@@ -2534,9 +2746,9 @@ async def hist_cmd(msg: Message, state: FSMContext):
 
 
 @admin_router.callback_query(F.data == "a:hist")
-async def cb_hist(cb: CallbackQuery):
+async def cb_hist_vecchio(cb: CallbackQuery):
     await cb.answer()
-    await _hist(cb.message, edit=True)
+    await _hist(cb.message, "all", 0, edit=True)
 
 
 def _stato_thanks(r):
@@ -2552,50 +2764,115 @@ def _stato_thanks(r):
     return "—"
 
 
-async def _hist(target, edit=False):
-    rows = await db.assignments()
-    if not rows:
-        testo = "Nessuna assegnazione registrata."
-        kbd = kb.nav("a:menu")
+FILTRI_NOMI = {
+    "all": "📚 Tutte",
+    "attesa": "⏳ In attesa",
+    "ok": "✅ Ringraziate",
+    "ko": "❌ Non ringraziate",
+    "rev": "↩️ Revocate",
+}
+
+
+def _riga_hist(r):
+    who = f"@{_esc(r['username'])}" if r["username"] else (
+        _esc(_nome(r)) if r["full_name"] else str(r["user_id"]))
+    link = _link(r["user_id"], r["username"])
+    when = _ora(r["assigned_at"], "%d/%m %H:%M")
+    stato = _stato_thanks(r)
+    kind = r["kind"] or "?"
+    return (f"<b>#{r['id']}</b> · {when} · L#{r['list_id']} {kind}\n"
+            f"   <a href=\"{link}\">{who}</a> → {stato}")
+
+
+async def _hist(target, filtro="all", page=0, edit=False):
+    try:
+        if filtro not in FILTRI_NOMI:
+            filtro = "all"
+        st = await db.assignments_stats()
+        tot = st["tot"]
+        if not tot:
+            testo = "Nessuna assegnazione registrata."
+            kbd = kb.nav("a:menu")
+            if edit:
+                return await _edit(target, testo, kbd)
+            return await target.answer(testo, reply_markup=kbd)
+
+        quanti = await db.count_assignments(filtro)
+        pagine = max(1, (quanti + PER_HIST - 1) // PER_HIST)
+        page = max(0, min(int(page), pagine - 1))
+        rows = await db.assignments_page(page * PER_HIST, PER_HIST, filtro)
+
+        corpo = ("\n\n".join(_riga_hist(r) for r in rows) if rows
+                 else "<i>Nessuna voce per questo filtro.</i>")
+
+        filtri_kb = []
+        riga_filtri = []
+        for chiave, etichetta in FILTRI_NOMI.items():
+            valore = {"all": st["tot"], "attesa": st["attesa"], "ok": st["ok"],
+                      "ko": st["ko"], "rev": st["rev"]}[chiave]
+            segno = "• " if chiave == filtro else ""
+            riga_filtri.append(InlineKeyboardButton(
+                text=f"{segno}{etichetta} {valore}", callback_data=f"a:hist:{chiave}:0"))
+        filtri_kb.append(riga_filtri[:3])
+        filtri_kb.append(riga_filtri[3:])
+
+        bottoni_revoca = []
+        for r in rows:
+            if not r["revoked"]:
+                bottoni_revoca.append(InlineKeyboardButton(
+                    text=f"↩️ #{r['id']}",
+                    callback_data=f"a:rev:{r['id']}:{filtro}:{page}"))
+        nav = []
+        nav.append(InlineKeyboardButton(
+            text="◀️" if page > 0 else "·",
+            callback_data=f"a:hist:{filtro}:{max(0, page - 1)}" if page > 0 else "a:noop"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{pagine}", callback_data="a:noop"))
+        nav.append(InlineKeyboardButton(
+            text="▶️" if (page + 1) * PER_HIST < quanti else "·",
+            callback_data=f"a:hist:{filtro}:{min(pagine - 1, page + 1)}"
+            if (page + 1) * PER_HIST < quanti else "a:noop"))
+
+        kbd_righe = list(filtri_kb)
+        if bottoni_revoca:
+            for i in range(0, len(bottoni_revoca), 4):
+                kbd_righe.append(bottoni_revoca[i:i + 4])
+        kbd_righe.append(nav)
+        kbd_righe.append([InlineKeyboardButton(text="🖐 Ringraziamenti", callback_data="a:man")])
+        kbd_righe.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
+        kbd_righe.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
+
+        testa = (f"<b>📤 Assegnazioni</b> · filtro {FILTRI_NOMI[filtro]}\n"
+                 f"Totale {tot} · ✅ {st['ok']} · ⏳ {st['attesa']} · ❌ {st['ko']} · "
+                 f"↩️ {st['rev']}\n"
+                 f"Pagina {page + 1} di {pagine}\n"
+                 f"──────────────")
+        testo = f"{testa}\n{corpo}"
+        kbd = InlineKeyboardMarkup(inline_keyboard=kbd_righe)
         if edit:
             return await _edit(target, testo, kbd)
-        return await target.answer(testo, reply_markup=kbd)
-    si = sum(1 for r in rows if r["thanked_at"])
-    no = sum(1 for r in rows if not r["thanked_at"] and not r["revoked"]
-             and r["thanks_deadline"]
-             and r["thanks_deadline"] <= dt.datetime.now(dt.timezone.utc))
-    attesa = sum(1 for r in rows if not r["thanked_at"] and not r["revoked"]
-                 and r["thanks_deadline"]
-                 and r["thanks_deadline"] > dt.datetime.now(dt.timezone.utc))
-    lines = []
-    for r in rows:
-        who = f"@{r['username']}" if r["username"] else (_nome(r) if r["full_name"]
-                                                         else str(r["user_id"]))
-        if len(who) > 17:
-            who = who[:16] + "…"
-        when = _ora(r["assigned_at"], "%d/%m %H:%M")
-        lines.append(f"#{r['id']} · {when} · L#{r['list_id']} {r['kind']} · "
-                     f"{who} → {_stato_thanks(r)}")
-    buttons = [[InlineKeyboardButton(text=f"Revoca #{r['id']}", callback_data=f"a:rev:{r['id']}")]
-               for r in rows[:10]]
-    buttons.append([InlineKeyboardButton(text="🖐 Ringraziamenti", callback_data="a:man")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Indietro", callback_data="a:menu")])
-    buttons.append([InlineKeyboardButton(text="🏠 Menu", callback_data="a:menu")])
-    testo = (f"<b>Ultime assegnazioni</b>\n"
-             f"✅ {si} · ⏳ {attesa} · ❌ {no}\n\n" + "\n".join(lines))
-    kbd = InlineKeyboardMarkup(inline_keyboard=buttons)
-    if edit:
-        return await _edit(target, testo, kbd)
-    await target.answer(testo, reply_markup=kbd)
+        await target.answer(testo, reply_markup=kbd)
+    except Exception as e:
+        await _avvisa(None, e)
+
+
+@admin_router.callback_query(F.data.startswith("a:hist:"))
+async def cb_hist(cb: CallbackQuery):
+    await cb.answer()
+    _, _, filtro, page = cb.data.split(":")
+    await _hist(cb.message, filtro, int(page), edit=True)
 
 
 @admin_router.callback_query(F.data.startswith("a:rev:"))
 async def revoke_cb(cb: CallbackQuery):
-    row = await db.revoke(int(cb.data.split(":")[2]))
+    pezzi = cb.data.split(":")
+    aid = int(pezzi[2])
+    filtro = pezzi[3] if len(pezzi) > 3 else "all"
+    page = int(pezzi[4]) if len(pezzi) > 4 else 0
+    row = await db.revoke(aid)
     await cb.answer("Revocata" if row else "Non trovata")
     if row:
         await db.log(cb.from_user.id, "revoca", str(row["id"]))
-        await _hist(cb.message, edit=True)
+    await _hist(cb.message, filtro, page, edit=True)
 
 
 @admin_router.message(Command("revoca"))
@@ -2609,7 +2886,7 @@ async def revoca_cmd(msg: Message, state: FSMContext):
     await state.set_state(Ask.wait)
     await state.update_data(action="revoca")
     await msg.answer("Quale assegnazione vuoi revocare? Mandami il numero "
-                     "(lo trovi con /assegnazioni)." + HINT, reply_markup=kb.nav("a:hist"))
+                     "(lo trovi con /assegnazioni)." + HINT, reply_markup=kb.nav("a:hist:all:0"))
 
 
 # ==================== UTENTI ====================
@@ -2886,8 +3163,12 @@ async def toggle_cmd(msg: Message, state: FSMContext):
     await state.clear()
     cur = await db.get_int("enabled")
     await db.set_setting("enabled", "0" if cur else "1")
-    await msg.answer("Bot spento. Nessuno riceverà liste." if cur else "Bot attivo.",
-                     reply_markup=kb.admin_menu())
+    if cur:
+        testo = ("🔴 Bot spento.\n\nInterruttore manuale: ringraziamenti, richieste e "
+                 "barzellette sono ignorati, i comandi admin restano attivi.")
+    else:
+        testo = "🟢 Bot attivo. Elaborazione normale ripristinata."
+    await msg.answer(testo, reply_markup=kb.admin_menu())
 
 
 async def _settings_kb():
@@ -3068,7 +3349,7 @@ async def ask_input(msg: Message, state: FSMContext):
     if action == "revoca":
         if not raw.strip().isdigit():
             return await msg.answer("Serve il numero dell'assegnazione. Riprova o scrivi /annulla.",
-                                    reply_markup=kb.nav("a:hist"))
+                                    reply_markup=kb.nav("a:hist:all:0"))
         row = await db.revoke(int(raw.strip()))
         await state.clear()
         return await msg.answer("Assegnazione revocata." if row else "Assegnazione non trovata.",
