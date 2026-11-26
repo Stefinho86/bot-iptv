@@ -147,7 +147,7 @@ async def testo():
     return "\n".join(righe)
 
 
-async def kb(acceso, da, a):
+def kb(acceso, da, a):
     sil = await sil_totale()
     avviso = _valida(da, a)
     if not acceso:
