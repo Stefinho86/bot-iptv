@@ -4,3 +4,4 @@ aiohttp==3.10.5
 aiohttp-socks==0.9.0
 pillow
 pytesseract
+tzdata
