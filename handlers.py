@@ -147,6 +147,7 @@ class SetTxt(StatesGroup):
     ko = State()
     nolist = State()
     broken = State()
+    privato = State()
     minuti = State()
     punizione = State()
     pun_gruppo = State()
@@ -241,7 +242,7 @@ def _comandi_text():
     return ("<b>📖 Comandi</b>\n\n"
             "<b>👤 Utente</b>\n"
             "/start - avvia il bot e mostra il benvenuto\n"
-            "/lista - ricevi una lista IPTV\n"
+            "/lista - ricevi una lista IPTV (nel gruppo risponde con la barzelletta)\n"
             "/mio - la tua lista attuale e lo stato del ringraziamento\n"
             "/ping - verifica che il bot risponda (chat id e tipo chat)\n\n"
             "<b>🎬 Liste</b>\n"
@@ -274,12 +275,16 @@ def _comandi_text():
             "/toggle - accendi o spegni il bot\n"
             "/annulla - interrompi l'operazione in corso\n\n"
             "<b>✏️ Personalizzazione</b>\n"
-            "Impostazioni → Frasi per l'utente: testi inviati agli utenti e minuti per "
-            "ringraziare.\n"
+            "Nel gruppo il bot non consegna liste: risponde con la barzelletta e il "
+            "pulsante per il privato. Le consegne sono solo in privato.\n"
+            "Impostazioni → Fascia silenzio: cosa resta acceso nel gruppo, in privato e "
+            "nelle notifiche.\n"
+            "Impostazioni → Frasi per l'utente: testi inviati agli utenti, invito in "
+            "privato e minuti per ringraziare.\n"
             "Impostazioni → Punizione mancato ringraziamento: cosa scrivere nel gruppo e "
             "agli admin quando il ringraziamento non arriva.\n"
             "Impostazioni → Barzellette sul tag: barzelletta quando il bot viene taggato "
-            "nel gruppo per chiedere una lista.\n"
+            "nel gruppo.\n"
             "Pannello → Ringraziamenti manuali: segna a mano un ringraziamento.\n\n"
             "Tutti i comandi sugli utenti accettano ID, @username o inoltro.")
 
@@ -640,30 +645,42 @@ async def _barzelletta():
     return _barzelletta_interna()
 
 
-async def _risposta_tag(msg):
-    """Barzelletta + invito in privato. False se le barzellette sono spente."""
-    if await db.get_int("joke_on") == 0:
-        return False
-    if not await orario.consenti("sil_g_barzellette"):
-        return False
-    battuta = await _barzelletta()
-    coda = _fmt(await db.get_setting("joke_testo"),
-                name=_esc(msg.from_user.first_name or "bello"))
+def _kbd_privato(me):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✍️ Scrivimi in privato",
+                             url=f"https://t.me/{me.username}")]])
+
+
+async def _vai_privato(msg, bot, battuta=True, extra=""):
+    """Nel gruppo il bot non consegna mai: barzelletta e pulsante per il privato."""
+    nome = _esc(msg.from_user.first_name or "bello")
+    parti = [extra] if extra else []
+    if battuta and await db.get_int("joke_on") == 1:
+        parti.append(await _barzelletta())
+        parti.append(_fmt(await db.get_setting("joke_testo"), name=nome))
+    elif not extra:
+        parti.append(_fmt(await db.get_setting("ph_privato"), name=nome))
     try:
-        await msg.reply(f"{battuta}\n\n{coda}", link_preview_options=NO_PREVIEW)
+        await msg.reply("\n\n".join(parti), reply_markup=_kbd_privato(await bot.me()),
+                        link_preview_options=NO_PREVIEW)
     except Exception as e:
-        print(f"risposta_tag: {type(e).__name__}: {e}")
-        return False
-    return True
+        print(f"vai_privato: {type(e).__name__}: {e}")
 
 
-async def _in_silenzio(msg, extra=""):
-    """Avviso breve in fascia: senza extra rimanda in privato."""
-    _acceso, _da, a = await orario.impostazioni()
-    corpo = f"🌙 Fascia silenzio fino alle {a}."
-    corpo += f" {extra}" if extra else " Ti scrivo in privato, così qui non sporco."
+async def _conferma_grazie(msg, bot):
     try:
-        await msg.reply(corpo, link_preview_options=NO_PREVIEW)
+        await msg.reply("🙏 Prego! Se ti serve un'altra lista scrivimi in privato.",
+                        link_preview_options=NO_PREVIEW)
+    except Exception:
+        pass
+
+
+async def _reclamo(msg, bot):
+    try:
+        await msg.reply("😕 Mi dispiace. Scrivimi in privato con il problema, così un "
+                        "admin ti passa una lista nuova.",
+                        reply_markup=_kbd_privato(await bot.me()),
+                        link_preview_options=NO_PREVIEW)
     except Exception:
         pass
 
@@ -1156,8 +1173,24 @@ async def mine(msg: Message):
 
 @user_router.callback_query(F.data == "u:get")
 async def cb_get(cb: CallbackQuery, bot: Bot):
-    await cb.answer("Preparo la lista...")
-    await _avvio_consegna(cb.message, cb.from_user, bot, await kb.is_admin_cb(cb))
+    if cb.message.chat.type == "private":
+        await cb.answer("Preparo la lista...")
+        return await _avvio_consegna(cb.message, cb.from_user, bot, await kb.is_admin_cb(cb))
+    await cb.answer("Te la mando in privato")
+    testo = _fmt(await db.get_setting("ph_privato"),
+                 name=_esc(cb.from_user.first_name or "bello"))
+    try:
+        await bot.send_message(cb.from_user.id, testo,
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                                   InlineKeyboardButton(text="🎬 Ricevi la lista",
+                                                        callback_data="u:get")]]),
+                               link_preview_options=NO_PREVIEW)
+    except Exception:
+        try:
+            await cb.message.answer(testo, reply_markup=_kbd_privato(await bot.me()),
+                                    link_preview_options=NO_PREVIEW)
+        except Exception:
+            pass
 
 
 @user_router.message(Ringrazia())
@@ -1190,34 +1223,24 @@ async def thanks(msg: Message, bot: Bot):
 
 
 async def _avvio_consegna(msg: Message, user, bot: Bot, adm: bool):
-    """Unico ingresso alle consegne: applica le regole della fascia."""
-    if msg.chat.type == "private" and await orario.attiva():
+    """Unico ingresso alle consegne. In privato applica le regole della fascia."""
+    if msg.chat.type != "private":
+        return await _vai_privato(msg, bot)
+    if await orario.attiva():
         _acceso, _da, a = await orario.impostazioni()
         if not await orario.consenti("sil_p_libere"):
             return await msg.answer(f"🌙 Fascia silenzio fino alle {a}. Riprova dopo.")
         if not await orario.consenti("sil_p_liste"):
             return await msg.answer(f"🌙 Fascia silenzio fino alle {a}: consegne sospese.")
-        return await deliver(msg, user, bot, adm)
-
-    dorme = msg.chat.type != "private" and await orario.attiva()
-    if not dorme:
-        return await deliver(msg, user, bot, adm)
-
-    if not await orario.consenti("sil_g_liste"):
-        if await orario.consenti("sil_g_conferme"):
-            await _in_silenzio(msg, "Richiesta registrata, le liste le mando dopo.")
-        return
-    if not await orario.consenti("sil_p_liste"):
-        if await orario.consenti("sil_g_conferme"):
-            await _in_silenzio(msg, "Consegne chiuse in questa fascia.")
-        return
-    if await orario.consenti("sil_g_conferme"):
-        await _in_silenzio(msg)
-    return await deliver(msg, user, bot, adm, dove=user.id)
+    return await deliver(msg, user, bot, adm)
 
 
 @user_router.message(Command("lista"))
 async def cmd_lista(msg: Message, bot: Bot):
+    if msg.chat.type != "private":
+        if await orario.attiva() and not await orario.consenti("sil_g_liste"):
+            return
+        return await _vai_privato(msg, bot)
     await _avvio_consegna(msg, msg.from_user, bot, await kb.is_admin_event(msg))
 
 
@@ -1235,44 +1258,26 @@ async def mention_any(msg: Message, bot: Bot):
         # Con attesa aperta il filtro Ringrazia ha già registrato tutto.
         if ha_attesa:
             return
-        frase = "🙏 Grazie! Il ringraziamento è già registrato."
-        if dorme:
-            if await orario.consenti("sil_p_conferme"):
-                try:
-                    await bot.send_message(msg.from_user.id, frase,
-                                           link_preview_options=NO_PREVIEW)
-                except Exception:
-                    pass
+        if dorme and not await orario.consenti("sil_g_conferme"):
             return
-        try:
-            await msg.reply(frase, link_preview_options=NO_PREVIEW)
-        except Exception:
-            pass
-        return
+        return await _conferma_grazie(msg, bot)
+
+    if esito == "reclamo":
+        if dorme and not await orario.consenti("sil_g_conferme"):
+            return
+        return await _reclamo(msg, bot)
 
     if esito == "saluto":
-        if dorme:
-            if await orario.consenti("sil_g_conferme"):
-                await _in_silenzio(msg)
+        if dorme and not await orario.consenti("sil_g_conferme"):
             return
-        me = await bot.me()
-        try:
-            await msg.reply(
-                "👋 Ciao! Per la lista scrivimi in privato qui sotto.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="✍️ Scrivimi in privato",
-                                         url=f"https://t.me/{me.username}")]]),
-                link_preview_options=NO_PREVIEW)
-        except Exception:
-            pass
-        return
+        return await _vai_privato(msg, bot, battuta=False)
 
-    if dorme:
-        return await _avvio_consegna(msg, msg.from_user, bot, False)
-
-    if await _risposta_tag(msg):
+    # richiesta o ambiguo
+    if dorme and not await orario.consenti("sil_g_liste"):
         return
-    await _avvio_consegna(msg, msg.from_user, bot, False)
+    if dorme and not await orario.consenti("sil_g_barzellette"):
+        return await _vai_privato(msg, bot, battuta=False)
+    return await _vai_privato(msg, bot)
 
 
 async def _controlla_ringraziamento(bot, uid, aid, minuti, nome, username):
@@ -1671,6 +1676,9 @@ FRASI = {
     "broken": ("🛠 Liste tutte rotte", SetTxt.broken, "broken_all",
                "{name}",
                "nome dell'utente"),
+    "priv": ("🍿 Invito in privato", SetTxt.privato, "ph_privato",
+             "{name}",
+             "nome dell'utente"),
 }
 
 
@@ -1750,7 +1758,7 @@ async def cb_frase(cb: CallbackQuery, state: FSMContext):
 
 @admin_router.message(StateFilter(SetTxt.welcome, SetTxt.consegna, SetTxt.richiesta,
                                   SetTxt.ok, SetTxt.ko, SetTxt.deny, SetTxt.not_member,
-                                  SetTxt.nolist, SetTxt.broken))
+                                  SetTxt.nolist, SetTxt.broken, SetTxt.privato))
 async def set_frase(msg: Message, state: FSMContext):
     stato = await state.get_state()
     setting = None
