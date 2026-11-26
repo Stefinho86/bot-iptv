@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat, ErrorEvent
 from aiohttp import web
 
 import config
@@ -109,17 +109,21 @@ async def start_health_once():
     print(f"Health server su :{port}")
 
 
-async def _errori(update, exception):
-    """Qualunque eccezione non gestita viene mostrata, non ingoiata."""
+async def _errori(event: ErrorEvent):
+    """aiogram 3 passa un ErrorEvent: dentro ci sono .update e .exception."""
+    exception = getattr(event, "exception", None)
+    update = getattr(event, "update", None)
+    if exception is None:
+        return True
     print(f"ERRORE HANDLER: {type(exception).__name__}: {exception}")
     traceback.print_exception(type(exception), exception, exception.__traceback__)
     testo = f"{type(exception).__name__}: {exception}"[:190]
     try:
-        cb = getattr(update, "callback_query", None)
+        cb = getattr(update, "callback_query", None) if update else None
         if cb:
             await cb.answer(f"ERRORE {testo}", show_alert=True)
             return True
-        msg = getattr(update, "message", None)
+        msg = getattr(update, "message", None) if update else None
         if msg:
             await msg.answer(f"<b>ERRORE</b>\n<code>{testo}</code>")
     except Exception:
