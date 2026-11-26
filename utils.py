@@ -5,7 +5,7 @@ from aiogram.filters import BaseFilter
 from aiogram.types import Message
 from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
 
-import classificatore as clf
+import classificatore
 import db
 
 ANON_ID = 1087968824
@@ -115,7 +115,12 @@ class NotCommand(BaseFilter):
 
 
 class Ringrazia(BaseFilter):
-    """Solo veri ringraziamenti: il classificatore scarta richieste e rumore."""
+    """Messaggio che vale come ringraziamento: decide il classificatore.
+
+    Restano i paletti di base (gruppo giusto, utente non admin, consegna in
+    attesa), ma il contenuto lo legge classificatore.py invece di una regex
+    larga che pescava anche "grazie, mi passi la lista?".
+    """
 
     async def __call__(self, message: Message, bot) -> bool:
         try:
@@ -132,16 +137,7 @@ class Ringrazia(BaseFilter):
             if not await db.pending_thanks(user.id):
                 return False
             testo = message.text or message.caption or ""
-            risposta = bool(message.reply_to_message and message.reply_to_message.from_user
-                            and message.reply_to_message.from_user.id == bot.id)
-            tipo = clf.classifica(
-                testo,
-                foto=bool(message.photo),
-                sticker=bool(message.sticker),
-                risposta_al_bot=risposta,
-                solo_emoji=bool(testo) and not any(c.isalnum() for c in testo),
-                in_attesa=True)
-            return tipo == clf.THANKS
+            return await classificatore.classifica(message, bot, testo, True) == "ringraziamento"
         except Exception as e:
             print(f"Ringrazia: {type(e).__name__}: {e}")
             return False
@@ -168,7 +164,7 @@ def admin_menu():
     return K(inline_keyboard=[
         [B(text="🎬 Ricevi una lista", callback_data="u:get")],
         [B(text="➕ Aggiungi lista", callback_data="a:add")],
-        [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist:all:0")],
+        [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist")],
         [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
         [B(text="📇 Elenco utenti", callback_data="lu:0"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
         [B(text="🚫 Utenti bannati", callback_data="lp:0")],
@@ -247,7 +243,7 @@ def back():
                               [B(text="🏠 Menu", callback_data="a:menu")]])
 
 
-def settings_kb(cooldown, proof, enabled, gonly, group_id):
+def settings_kb(cooldown, proof, enabled, gonly, group_id, silenzio):
     gid = group_id if group_id and group_id != "0" else "non impostato"
     return K(inline_keyboard=[
         [B(text=f"⏳ Attesa: {cooldown} giorni", callback_data="s:cool")],
@@ -256,7 +252,7 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id):
         [B(text=f"🖼 Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
         [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
         [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
-        [B(text="🌙 Fascia di silenzio", callback_data="a:orario")],
+        [B(text=f"🌙 Fascia silenzio: {silenzio}", callback_data="a:orario")],
         [B(text="✏️ Frasi per l'utente", callback_data="a:frasi")],
         [B(text="⚖️ Punizione mancato ringraziamento", callback_data="a:pun")],
         [B(text="🤡 Barzellette sul tag", callback_data="a:joke")],
