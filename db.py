@@ -79,6 +79,8 @@ DEFAULTS = {
     "joke_api": "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json",
     "joke_testo": ("Coglionazzo! 😂❤️\n"
                    "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
+    "ph_privato": ("🍿 {name}, le liste le do <b>solo in privato</b>.\n"
+                   "Aprimi qui sotto, premi START e te la mando subito. 😉"),
     "welcome": ("👋 Ciao {name}!\n\n"
                 "Benvenuto nel canale liste. 🎬\n"
                 "Premi il pulsante qui sotto per ricevere la tua lista IPTV: "
