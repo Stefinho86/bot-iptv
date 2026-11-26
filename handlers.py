@@ -196,10 +196,8 @@ async def _silenzio_totale():
 
 async def _quadro(s):
     acceso, da, a = await orario.impostazioni()
-    fascia = await orario.stato_breve(acceso, da, a)
+    fascia = orario.stato_breve(acceso, da, a)
     bot_on = await db.get_int("enabled")
-    if await _silenzio_totale():
-        fascia = "🔕 silenzio totale"
     return (f"<b>Pannello admin</b>\n\n"
             f"📋 Libere: {s['free']} · 📤 Assegnate: {s['assigned']}\n"
             f"👤 Utenti: {s['users']} · 🛡 Admin: {s['admins']} · 👑 Proprietario: {s['super']}\n"
@@ -216,7 +214,7 @@ async def _statistiche_text():
     minuti = await db.get_int("thanks_min")
     punizione = _esc(await db.get_setting("punizione"))
     acceso, da, a = await orario.impostazioni()
-    fascia = await orario.stato_breve(acceso, da, a)
+    fascia = orario.stato_breve(acceso, da, a)
     totale = await _silenzio_totale()
     return ("<b>📊 Statistiche</b>\n\n"
             f"📋 Liste libere: <b>{s['free']}</b>\n"
@@ -481,7 +479,7 @@ async def _stato_text(msg, bot):
     gonly = await db.get_int("group_only")
     en = await db.get_int("enabled")
     acceso, da, a = await orario.impostazioni()
-    fascia = await orario.stato_breve(acceso, da, a)
+    fascia = orario.stato_breve(acceso, da, a)
     ora = dt.datetime.now(ROMA).strftime("%H:%M")
     in_fascia = await orario.attiva()
     totale = await _silenzio_totale()
@@ -3136,7 +3134,7 @@ async def toggle_cmd(msg: Message, state: FSMContext):
 
 async def _settings_kb():
     acceso, da, a = await orario.impostazioni()
-    fascia = await orario.stato_breve(acceso, da, a)
+    fascia = orario.stato_breve(acceso, da, a)
     if await _silenzio_totale():
         fascia = "🔕 silenzio totale"
     return kb.settings_kb(await db.get_int("cooldown_days"),
