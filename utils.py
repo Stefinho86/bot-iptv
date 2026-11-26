@@ -10,13 +10,18 @@ import db
 
 ANON_ID = 1087968824
 
+_TOKEN_TTL = 600
 _TOKENS = {}
 
 
 def new_token(chat_id):
     import secrets
+    adesso = time.time()
+    for t, (_cid, exp) in list(_TOKENS.items()):
+        if exp <= adesso:
+            _TOKENS.pop(t, None)
     t = secrets.token_urlsafe(9)
-    _TOKENS[t] = (chat_id, time.time() + 600)
+    _TOKENS[t] = (chat_id, adesso + _TOKEN_TTL)
     return t
 
 
@@ -94,17 +99,36 @@ async def is_admin_cb(cb) -> bool:
 
 
 class Trigger(BaseFilter):
+    """Il bot è chiamato: tag esplicito, risposta a un suo messaggio, o chat
+    privata. Guarda sia entities sia caption_entities, e non esplode su
+    inoltri da canale o admin anonimi."""
+
     async def __call__(self, message: Message, bot) -> bool:
         if message.chat.type == "private":
             return True
-        if message.reply_to_message and message.reply_to_message.from_user.id == bot.id:
+
+        rip = getattr(message, "reply_to_message", None)
+        autore = getattr(rip, "from_user", None) if rip else None
+        if autore is not None and autore.id == bot.id:
             return True
-        if message.entities:
-            for e in message.entities:
-                if e.type == "mention":
-                    frag = message.text[e.offset:e.offset + e.length].lstrip("@").lower()
-                    if frag == (await bot.me()).username.lower():
-                        return True
+
+        testo = message.text or message.caption or ""
+        ent = list(getattr(message, "entities", None) or [])
+        ent += list(getattr(message, "caption_entities", None) or [])
+        if not ent or not testo:
+            return False
+
+        try:
+            mio = (await bot.me()).username.lower()
+        except Exception:
+            return False
+
+        for e in ent:
+            if e.type != "mention":
+                continue
+            frag = testo[e.offset:e.offset + e.length].lstrip("@").lower()
+            if frag == mio:
+                return True
         return False
 
 
@@ -117,7 +141,10 @@ class NotCommand(BaseFilter):
 class Ringrazia(BaseFilter):
     """Messaggio di ringraziamento vero. Le precondizioni sono le stesse di
     prima, ma la decisione finale la prende il classificatore: così un
-    "ciao @bot mi dai una lista" non viene scambiato per un grazie."""
+    "ciao @bot mi dai una lista" non viene scambiato per un grazie.
+
+    Usa ultima_non_ringraziata, non pending_thanks: così vale anche il grazie
+    arrivato dopo la scadenza, che pending_thanks scarterebbe."""
 
     async def __call__(self, message: Message, bot) -> bool:
         try:
@@ -131,7 +158,7 @@ class Ringrazia(BaseFilter):
                 return False
             if await db.is_admin(user.id, user.username):
                 return False
-            if not await db.pending_thanks(user.id):
+            if not await db.ultima_non_ringraziata(user.id):
                 return False
             testo = message.text or message.caption or ""
             return await classificatore.classifica(message, bot, testo, True) == "ringraziamento"
@@ -149,11 +176,7 @@ def nav(back):
     return K(inline_keyboard=_nav(back))
 
 
-def nav_extra(back):
-    return _nav(back)
-
-
-def user_kb(days):
+def user_kb(days=None):
     return K(inline_keyboard=[[B(text="Ricevi una lista", callback_data="u:get")]])
 
 
@@ -267,8 +290,9 @@ def user_row(uid, banned):
 
 
 def chat_url(uid, username=None):
-    if username:
-        return f"https://t.me/{username}"
+    n = re.sub(r"[-9A-Za-z_]", "", username or "")[:32]
+    if n:
+        return f"https://t.me/{n}"
     return f"tg://user?id={uid}"
 
 
@@ -281,11 +305,17 @@ async def member_ok(bot, uid):
         return True
     gid = await db.get_group_id()
     if gid == 0:
-        return False
-    try:
-        m = await bot.get_chat_member(gid, uid)
-    except Exception:
-        return False
+        print("member_ok: group_id non impostato, filtro gruppo ignorato")
+        return True
+    m = None
+    for _ in range(2):
+        try:
+            m = await bot.get_chat_member(gid, uid)
+            break
+        except Exception as e:
+            print(f"member_ok: {type(e).__name__}: {e}")
+    if m is None:
+        return True
     if m.status in ("creator", "administrator", "member"):
         return True
     return bool(m.status == "restricted" and getattr(m, "is_member", False))
