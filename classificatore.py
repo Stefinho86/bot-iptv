@@ -2,14 +2,16 @@ import re
 
 GRAZIE = re.compile(r"\b(grazie|ringrazi\w*|ringraziam\w*|ti ringrazio|grz|thx|thanks)\b", re.I)
 BONTA = re.compile(r"\b(funziona|funzionante|ottima|ottimo|perfetta|perfetto|liscio|"
-                   r"va bene|tutto ok|top|grande|figata|spettacolo|ok)\b", re.I)
+                   r"va bene|tutto ok|top|grande|figata|spettacolo)\b", re.I)
 SALUTO = re.compile(r"\b(ciao|salve|buongiorno|buonasera|buon pomeriggio|hey|ehi|ola)\b", re.I)
 RICHIESTA = re.compile(r"\b(lista|liste|link|m3u|iptv|posso|vorrei|mi dai|mi mandi|mandi|"
-                       r"serve|avrei|dammi|consegna|nuova|altro|altra|ancora|riprovo)\b", re.I)
+                       r"serve|avrei|dammi|consegna|nuova)\b", re.I)
 ALTRA = re.compile(r"\b(altra|altro|nuova|nuovo|ancora|seconda|riprovo|rifaccio)\b", re.I)
-NEGAZIONE = re.compile(r"\b(non funziona|non va|non parte|non si vede|non carica|non apre|"
-                       r"buona a niente|schifo|rotto|rotta|errore|problema|scaduta|"
-                       r"bloccata|si blocca)\b", re.I)
+NEGAZIONE = re.compile(r"\b(non funziona|non funzionano|non va|non vanno|non parte|"
+                       r"non si vede|non si sente|non carica|non apre|non si apre|"
+                       r"non gira|buona a niente|schifo|rotto|rotta|rotte|errore|errori|"
+                       r"problema|problemi|scaduta|scadute|bloccata|si blocca|"
+                       r"schermo nero|buffer\w*|lista morta|liste morte)\b", re.I)
 
 
 def risposta_al_bot(msg, bot):
@@ -28,7 +30,7 @@ async def classifica(msg, bot, testo, ha_attesa):
 
     Ordine delle priorità, quando c'è un'attesa aperta:
     1. foto o file -> ringraziamento (è lo screenshot)
-    2. negazione ("non funziona", "scaduta", "errore") -> reclamo, vince anche su "grazie"
+    2. negazione ("non funziona", "scaduta", "errore") -> reclamo, vince su tutto
     3. "grazie" senza richiesta di un'altra lista -> ringraziamento
     4. richiesta di lista -> richiesta
     5. complimento -> ringraziamento
@@ -57,7 +59,7 @@ async def classifica(msg, bot, testo, ha_attesa):
             return "ringraziamento"
         if richiesta:
             return "richiesta"
-        if bonta or grazie:
+        if bonta:
             return "ringraziamento"
         if saluto:
             return "saluto"
