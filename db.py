@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS logs(
 
 CREATE INDEX IF NOT EXISTS idx_lists_status ON lists(status);
 CREATE INDEX IF NOT EXISTS idx_assign_user ON assignments(user_id);
+CREATE INDEX IF NOT EXISTS idx_assign_data ON assignments(assigned_at DESC);
 """
 
 DEFAULTS = {
@@ -51,6 +52,12 @@ DEFAULTS = {
     "group_link": "",
     "thanks_min": "10",
     "punizione": "ammonizione",
+    "sleep_on": "0",
+    "sleep_start": "00:00",
+    "sleep_end": "07:00",
+    "sleep_days": "0,1,2,3,4,5,6",
+    "sleep_dm": "1",
+    "sleep_no_punish": "1",
     "pun_gruppo": ("⚠️ {user} — non hai rispettato il regolamento del gruppo: "
                    "non hai ringraziato entro {minuti} minuti.\n\n"
                    "Punizione prevista: <b>{punizione}</b>\n"
@@ -452,12 +459,51 @@ async def last_assignment(uid):
             "WHERE a.user_id=$1 AND a.revoked=FALSE ORDER BY a.id DESC LIMIT 1", uid)
 
 
-async def assignments(limit=20):
+# ---- storico paginato ----
+FILTRI = ("all", "attesa", "ok", "ko", "rev")
+
+
+def _filtro_sql(filtro):
+    if filtro == "ok":
+        return "a.thanked_at IS NOT NULL"
+    if filtro == "ko":
+        return ("a.thanked_at IS NULL AND a.revoked=FALSE AND a.thanks_deadline IS NOT NULL "
+                "AND a.thanks_deadline <= now()")
+    if filtro == "attesa":
+        return ("a.thanked_at IS NULL AND a.revoked=FALSE AND a.thanks_deadline IS NOT NULL "
+                "AND a.thanks_deadline > now()")
+    if filtro == "rev":
+        return "a.revoked=TRUE"
+    return "TRUE"
+
+
+async def assignments_stats():
+    async with _pool.acquire() as c:
+        r = await c.fetchrow(
+            "SELECT COUNT(*) AS tot, "
+            "COUNT(*) FILTER (WHERE thanked_at IS NOT NULL) AS ok, "
+            "COUNT(*) FILTER (WHERE revoked=TRUE) AS rev, "
+            "COUNT(*) FILTER (WHERE thanked_at IS NULL AND revoked=FALSE "
+            "  AND thanks_deadline IS NOT NULL AND thanks_deadline <= now()) AS ko, "
+            "COUNT(*) FILTER (WHERE thanked_at IS NULL AND revoked=FALSE "
+            "  AND thanks_deadline IS NOT NULL AND thanks_deadline > now()) AS attesa "
+            "FROM assignments")
+        return dict(r)
+
+
+async def count_assignments(filtro="all"):
+    cond = _filtro_sql(filtro)
+    async with _pool.acquire() as c:
+        return await c.fetchval(f"SELECT COUNT(*) FROM assignments a WHERE {cond}")
+
+
+async def assignments_page(offset, limit, filtro="all"):
+    cond = _filtro_sql(filtro)
     async with _pool.acquire() as c:
         return await c.fetch(
-            "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
-            "JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
-            "ORDER BY a.id DESC LIMIT $1", limit)
+            f"SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
+            f"LEFT JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
+            f"WHERE {cond} ORDER BY a.id DESC OFFSET $1 LIMIT $2", offset, limit)
 
 
 async def revoke(aid):
