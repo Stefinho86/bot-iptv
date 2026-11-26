@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS logs(
 
 CREATE INDEX IF NOT EXISTS idx_lists_status ON lists(status);
 CREATE INDEX IF NOT EXISTS idx_assign_user ON assignments(user_id);
-CREATE INDEX IF NOT EXISTS idx_assign_when ON assignments(assigned_at DESC);
 """
 
 DEFAULTS = {
@@ -52,16 +51,6 @@ DEFAULTS = {
     "group_link": "",
     "thanks_min": "10",
     "punizione": "ammonizione",
-    "sleep_on": "0",
-    "sleep_start": "00:00",
-    "sleep_end": "07:00",
-    "sleep_days": "0,1,2,3,4,5,6",
-    "sleep_silence": "0",
-    "sleep_lists": "1",
-    "sleep_thanks": "1",
-    "sleep_dm": "1",
-    "sleep_joke": "0",
-    "sleep_no_punish": "1",
     "pun_gruppo": ("⚠️ {user} — non hai rispettato il regolamento del gruppo: "
                    "non hai ringraziato entro {minuti} minuti.\n\n"
                    "Punizione prevista: <b>{punizione}</b>\n"
@@ -78,6 +67,9 @@ DEFAULTS = {
     "joke_api": "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json",
     "joke_testo": ("Coglionazzo! 😂❤️\n"
                    "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
+    "silenzio_on": "0",
+    "silenzio_da": "00:00",
+    "silenzio_a": "07:00",
     "welcome": ("👋 Ciao {name}!\n\n"
                 "Benvenuto nel canale liste. 🎬\n"
                 "Premi il pulsante qui sotto per ricevere la tua lista IPTV: "
@@ -105,9 +97,6 @@ DEFAULTS = {
                  "Riprova più tardi, sto rifornendo. ⏳"),
     "broken_all": ("🛠 Nessuna lista ha superato il test, {name}.\n"
                    "Avvisa un admin, ci stiamo lavorando. 🔧"),
-    "pausa": ("🌙 <b>Bot in pausa</b>, {name}.\n\n"
-              "Il gruppo è chiuso fino alle <b>{fine}</b>: qui in privato non posso "
-              "servirti. Riprova dopo. 😴"),
 }
 
 VECCHIE_FRASI = {
@@ -196,8 +185,8 @@ async def get_setting(key):
 async def get_int(key):
     try:
         return int(await get_setting(key))
-    except (TypeError, ValueError):
-        return int(DEFAULTS.get(key, "0") or 0)
+    except ValueError:
+        return int(DEFAULTS.get(key, "0"))
 
 
 async def get_group_id():
@@ -430,6 +419,7 @@ async def mark_thanked(uid):
 
 
 async def set_thanked(aid, si):
+    """Forzatura manuale: si=True registra il ringraziamento, si=False lo toglie."""
     async with _pool.acquire() as c:
         if si:
             await c.execute("UPDATE assignments SET thanked_at=$2, "
@@ -465,6 +455,19 @@ async def last_assignment(uid):
             "WHERE a.user_id=$1 AND a.revoked=FALSE ORDER BY a.id DESC LIMIT 1", uid)
 
 
+async def assignments(limit=20):
+    async with _pool.acquire() as c:
+        return await c.fetch(
+            "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
+            "JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
+            "ORDER BY a.id DESC LIMIT $1", limit)
+
+
+async def count_assignments():
+    async with _pool.acquire() as c:
+        return await c.fetchval("SELECT COUNT(*) FROM assignments")
+
+
 async def revoke(aid):
     async with _pool.acquire() as c:
         row = await c.fetchrow("SELECT * FROM assignments WHERE id=$1", aid)
@@ -474,55 +477,6 @@ async def revoke(aid):
         await c.execute("UPDATE lists SET status='free' WHERE id=$1", row["list_id"])
         await c.execute("UPDATE users SET next_available=NULL WHERE user_id=$1", row["user_id"])
         return row
-
-
-_FILTRI = {
-    "all": "($1::timestamptz IS NOT NULL)",
-    "attesa": ("NOT revoked AND thanked_at IS NULL AND thanks_deadline IS NOT NULL "
-               "AND thanks_deadline > $1"),
-    "ok": "($1::timestamptz IS NOT NULL) AND thanked_at IS NOT NULL",
-    "ko": ("NOT revoked AND thanked_at IS NULL AND thanks_deadline IS NOT NULL "
-           "AND thanks_deadline <= $1"),
-    "rev": "($1::timestamptz IS NOT NULL) AND revoked",
-}
-
-
-async def assignments_stats():
-    async with _pool.acquire() as c:
-        row = await c.fetchrow(
-            "SELECT COUNT(*) AS tot, "
-            "COUNT(*) FILTER (WHERE thanked_at IS NOT NULL) AS ok, "
-            "COUNT(*) FILTER (WHERE revoked) AS rev, "
-            "COUNT(*) FILTER (WHERE NOT revoked AND thanked_at IS NULL "
-            "  AND thanks_deadline IS NOT NULL AND thanks_deadline > $1) AS attesa, "
-            "COUNT(*) FILTER (WHERE NOT revoked AND thanked_at IS NULL "
-            "  AND thanks_deadline IS NOT NULL AND thanks_deadline <= $1) AS ko "
-            "FROM assignments", now())
-    return dict(row)
-
-
-async def count_assignments(filtro="all"):
-    cond = _FILTRI.get(filtro, _FILTRI["all"])
-    async with _pool.acquire() as c:
-        return await c.fetchval(f"SELECT COUNT(*) FROM assignments WHERE {cond}", now())
-
-
-async def assignments_page(offset, limit, filtro="all"):
-    cond = _FILTRI.get(filtro, _FILTRI["all"])
-    async with _pool.acquire() as c:
-        return await c.fetch(
-            "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
-            "JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
-            f"WHERE {cond} ORDER BY a.assigned_at DESC, a.id DESC OFFSET $2 LIMIT $3",
-            now(), offset, limit)
-
-
-async def assignments(limit=20):
-    async with _pool.acquire() as c:
-        return await c.fetch(
-            "SELECT a.*, l.kind, l.label, u.username, u.full_name FROM assignments a "
-            "JOIN lists l ON l.id=a.list_id LEFT JOIN users u ON u.user_id=a.user_id "
-            "ORDER BY a.id DESC LIMIT $1", limit)
 
 
 async def stats():
@@ -550,6 +504,7 @@ async def all_free_payloads():
         return [{**dict(r), "added_at": r["added_at"].isoformat()} for r in rows]
 
 
+# ---- elenchi utenti: righe vere, il taglio avviene in Python ----
 async def all_users_list(escludi):
     async with _pool.acquire() as c:
         return await c.fetch(
