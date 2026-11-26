@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import os
 import random
 import re
 import shutil
@@ -9,7 +10,7 @@ import uuid
 
 import aiohttp
 import pytesseract
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageStat
 
 import config
 
@@ -26,10 +27,20 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEAD = {"User-Agent": UA, "Accept": "*/*"}
 
+TEST_BUDGET = int(os.environ.get("TEST_BUDGET", "75") or 75)
+MAX_PIXEL = 24_000_000
+
 _BINS_OK = False
+_LINGUE = None
+
+
+def _LANCZOS():
+    return getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 
 def _ensure_bins():
+    """Solo controllo: nessuna installazione a runtime (blocca l'event loop
+    e in un container non-root fallisce comunque)."""
     global _BINS_OK
     if _BINS_OK:
         return
@@ -37,15 +48,33 @@ def _ensure_bins():
     manca = [p for p in ("tesseract", "ffmpeg") if not shutil.which(p)]
     if not manca:
         return
-    pacchetti = [{"tesseract": "tesseract-ocr", "ffmpeg": "ffmpeg"}[p] for p in manca]
     print("mancano:", manca)
-    try:
-        subprocess.run(["apt-get", "update", "-qq"], timeout=180)
-        subprocess.run(["apt-get", "install", "-y", "-qq", *pacchetti,
-                        "tesseract-ocr-eng"], timeout=420)
-    except Exception as e:
-        print("installazione fallita:", e)
+    if os.environ.get("AUTO_INSTALL", "").strip() in ("1", "true", "yes"):
+        pacchetti = [{"tesseract": "tesseract-ocr", "ffmpeg": "ffmpeg"}[p] for p in manca]
+        try:
+            subprocess.run(["apt-get", "update", "-qq"], timeout=180)
+            subprocess.run(["apt-get", "install", "-y", "-qq", *pacchetti,
+                            "tesseract-ocr-ita", "tesseract-ocr-eng"], timeout=420)
+        except Exception as e:
+            print("installazione fallita:", e)
     print("ffmpeg:", shutil.which("ffmpeg"), "tesseract:", shutil.which("tesseract"))
+
+
+def _lingue():
+    global _LINGUE
+    if _LINGUE is not None:
+        return _LINGUE
+    try:
+        disp = set(pytesseract.get_languages(config=""))
+    except Exception:
+        disp = set()
+    if "ita" in disp and "eng" in disp:
+        _LINGUE = "ita+eng"
+    elif "ita" in disp:
+        _LINGUE = "ita"
+    else:
+        _LINGUE = "eng"
+    return _LINGUE
 
 
 def ocr_bytes(data):
@@ -53,14 +82,24 @@ def ocr_bytes(data):
     img = Image.open(io.BytesIO(data)).convert("L")
     w, h = img.size
     if w < 2200:
-        k = min(4, max(2, 2200 // max(w, 1)))
-        img = img.resize((w * k, h * k), Image.LANCZOS)
-    if sum(img.getdata()) / (img.size[0] * img.size[1]) < 110:
+        k = min(3, max(2, 2200 // max(w, 1)))
+        if w * k * h * k <= MAX_PIXEL:
+            img = img.resize((w * k, h * k), _LANCZOS())
+    if ImageStat.Stat(img).mean[0] < 110:
         img = ImageOps.invert(img)
     img = ImageOps.autocontrast(img)
+    lingua = _lingue()
     migliore = ""
     for psm in ("4", "6", "11"):
-        out = pytesseract.image_to_string(img, lang="eng", config=f"--oem 3 --psm {psm}")
+        try:
+            out = pytesseract.image_to_string(img, lang=lingua,
+                                              config=f"--oem 3 --psm {psm}")
+        except Exception:
+            try:
+                out = pytesseract.image_to_string(img, lang="eng",
+                                                  config=f"--oem 3 --psm {psm}")
+            except Exception:
+                continue
         if out.count("http") > migliore.count("http"):
             migliore = out
         elif not migliore.strip() and out.strip():
@@ -109,10 +148,13 @@ def detect(text):
             return {"kind": "m3u", "label": _base(u), "payload": {"url": u}}
         if qu and qp:
             return {"kind": "xtream", "label": _base(u),
-                    "payload": {"server": _base(u), "username": qu.group(1), "password": qp.group(1)}}
+                    "payload": {"server": _base(u), "username": qu.group(1),
+                                "password": qp.group(1)}}
         if "/c/" in low or "portal.php" in low or "stalker" in low:
+            if not mac:
+                return None
             return {"kind": "stalker", "label": _base(u),
-                    "payload": {"portal": _base(u), "mac": mac.group(0).upper() if mac else ""}}
+                    "payload": {"portal": _base(u), "mac": mac.group(0).upper()}}
         if M3U_EXT.search(low) or "get.php" in low or "type=m3u" in low:
             return {"kind": "m3u", "label": _base(u), "payload": {"url": u}}
 
@@ -136,7 +178,8 @@ def preview(item):
         return (f"Tipo: Xtream Codes\nServer: <code>{p['server']}</code>\n"
                 f"Utente: <code>{p['username']}</code>\nPassword: <code>{p['password']}</code>")
     if item["kind"] == "stalker":
-        return f"Tipo: Stalker Portal\nPortal: <code>{p['portal']}</code>\nMAC: <code>{p['mac']}</code>"
+        return (f"Tipo: Stalker Portal\nPortal: <code>{p['portal']}</code>\n"
+                f"MAC: <code>{p['mac']}</code>")
     return f"Tipo: M3U\nURL: <code>{p['url']}</code>"
 
 
@@ -180,10 +223,10 @@ def chiavi_lista(kind, p):
     elif kind == "stalker":
         h = _host_norm(p.get("portal"))
         m = (p.get("mac") or "").replace("-", ":").upper()
-        if m:
-            out.add(f"sm|{m}")
         if h and m:
             out.add(f"sp|{h}|{m}")
+        elif m:
+            out.add(f"sm|{m}")
     else:
         u = _url_norm(p.get("url"))
         if u.strip("|"):
@@ -200,21 +243,40 @@ def _out():
     return config.MEDIA_DIR / f"{uuid.uuid4().hex}.jpg"
 
 
-async def grab_frame(url):
+async def grab_frame(url, timeout=20):
     out = _out()
     cmd = [config.FFMPEG, "-y", "-loglevel", "error", "-user_agent", UA,
-           "-rw_timeout", "12000000", "-probesize", "600000", "-analyzeduration", "1500000",
+           "-rw_timeout", "10000000", "-probesize", "500000",
+           "-analyzeduration", "1200000",
            "-i", url, "-frames:v", "1", "-vf", "scale=720:-2", "-q:v", "3", str(out)]
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         try:
-            await asyncio.wait_for(proc.communicate(), timeout=25)
+            await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            out.unlink(missing_ok=True)
-            return None
+            raise
     except FileNotFoundError:
+        return None
+    except (asyncio.TimeoutError, asyncio.CancelledError) as e:
+        if proc is not None:
+            try:
+                proc.kill()
+                await asyncio.shield(proc.wait())
+            except Exception:
+                pass
+        out.unlink(missing_ok=True)
+        if isinstance(e, asyncio.CancelledError):
+            raise
+        return None
+    except Exception:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        out.unlink(missing_ok=True)
         return None
     if out.exists() and out.stat().st_size > 4000:
         return out
@@ -225,8 +287,9 @@ async def grab_frame(url):
 async def _primo_frame(urls, blocchi=3):
     for i in range(0, len(urls), blocchi):
         gruppo = urls[i:i + blocchi]
-        esiti = await asyncio.gather(*(grab_frame(u) for u in gruppo))
-        buoni = [f for f in esiti if f]
+        esiti = await asyncio.gather(*(grab_frame(u) for u in gruppo),
+                                     return_exceptions=True)
+        buoni = [f for f in esiti if f and not isinstance(f, Exception)]
         if buoni:
             for f in buoni[1:]:
                 f.unlink(missing_ok=True)
@@ -242,7 +305,7 @@ def _mescola(urls, quanti):
     return c[:quanti]
 
 
-async def _get(session, url, headers=None, timeout=25):
+async def _get(session, url, headers=None, timeout=20):
     h = {**HEAD, **(headers or {})}
     async with session.get(url, headers=h, ssl=False, allow_redirects=True,
                            timeout=aiohttp.ClientTimeout(total=timeout)) as r:
@@ -259,13 +322,16 @@ def _canali_m3u(corpo):
 
 
 async def _test_m3u(session, p):
-    st, body = await _get(session, p["url"], timeout=30)
+    try:
+        st, body = await _get(session, p["url"], timeout=25)
+    except Exception as e:
+        return Result(False, f"connessione: {type(e).__name__}")
     if st >= 400:
         return Result(False, f"HTTP {st}")
     urls = _canali_m3u(body)
     if not urls:
         return Result(False, "playlist vuota o non valida")
-    f = await _primo_frame(_mescola(urls, 18))
+    f = await _primo_frame(_mescola(urls, 9))
     if f:
         return Result(True, "ok", f, f"{len(urls)} canali")
     return Result(False, "nessuno stream riproducibile")
@@ -273,7 +339,7 @@ async def _test_m3u(session, p):
 
 def _pwd_varianti(pwd):
     v = [pwd]
-    for a, b in (("0", "o"), ("o", "0"), ("1", "l"), ("l", "1"), ("O", "0"), ("S", "5")):
+    for a, b in (("0", "o"), ("o", "0"), ("1", "l"), ("l", "1")):
         x = pwd.replace(a, b)
         if x != pwd and x not in v:
             v.append(x)
@@ -282,14 +348,14 @@ def _pwd_varianti(pwd):
             v.append(x[:-1] + "0")
         if x.endswith("0") and (x[:-1] + ".") not in v:
             v.append(x[:-1] + ".")
-    return v
+    return v[:4]
 
 
 async def _api_xtream(session, srv, user, pwd, azione=None):
     q = f"username={user}&password={pwd}"
     if azione:
         q += f"&action={azione}"
-    return await _get(session, f"{srv}/player_api.php?{q}", timeout=30)
+    return await _get(session, f"{srv}/player_api.php?{q}", timeout=20)
 
 
 async def _test_xtream(session, p):
@@ -297,7 +363,11 @@ async def _test_xtream(session, p):
     buono = None
     for srv in [p["server"], *(p.get("alts") or [])]:
         for pwd in _pwd_varianti(p["password"]):
-            st, body = await _api_xtream(session, srv, p["username"], pwd)
+            try:
+                st, body = await _api_xtream(session, srv, p["username"], pwd)
+            except Exception as e:
+                ultimo = f"{type(e).__name__} su {srv}"
+                continue
             if st >= 400:
                 ultimo = f"HTTP {st} su {srv}"
                 continue
@@ -323,18 +393,19 @@ async def _test_xtream(session, p):
     base, p["password"], ui = buono
     info = f"scadenza {ui.get('exp_date') or '-'}"
 
-    st, body = await _api_xtream(session, base, p["username"], p["password"], "get_live_streams")
     ids = []
     try:
+        st, body = await _api_xtream(session, base, p["username"], p["password"],
+                                     "get_live_streams")
         for c in json.loads(body) or []:
             sid = c.get("stream_id") or c.get("id")
             if sid:
                 ids.append(sid)
     except Exception:
-        pass
+        ids = []
 
     urls = []
-    for sid in _mescola(ids, 12):
+    for sid in _mescola(ids, 6):
         for ext in ("m3u8", "ts"):
             urls.append(f"{base}/live/{p['username']}/{p['password']}/{sid}.{ext}")
     if urls:
@@ -342,11 +413,14 @@ async def _test_xtream(session, p):
         if f:
             return Result(True, "ok", f, info)
 
-    st, corpo = await _get(
-        session, f"{base}/get.php?username={p['username']}&password={p['password']}"
-                 f"&type=m3u_plus&output=m3u8", timeout=35)
+    try:
+        st, corpo = await _get(
+            session, f"{base}/get.php?username={p['username']}&password={p['password']}"
+                     f"&type=m3u_plus&output=m3u8", timeout=30)
+    except Exception as e:
+        return Result(False, f"connessione: {type(e).__name__}", info=info)
     if st < 400:
-        f = await _primo_frame(_mescola(_canali_m3u(corpo), 15))
+        f = await _primo_frame(_mescola(_canali_m3u(corpo), 9))
         if f:
             return Result(True, "ok", f, info)
     return Result(False, "nessun canale riproducibile", info=info)
@@ -357,8 +431,13 @@ async def _test_stalker(session, p):
         return Result(False, "MAC mancante")
     base = p["portal"].rstrip("/")
     ck = {"Cookie": f"mac={p['mac']}; stb_lang=en; timezone=Europe/Rome"}
-    st, body = await _get(
-        session, f"{base}/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml", ck)
+    try:
+        st, body = await _get(
+            session,
+            f"{base}/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml",
+            ck)
+    except Exception as e:
+        return Result(False, f"connessione: {type(e).__name__}")
     try:
         tok = (json.loads(body).get("js") or {}).get("token")
     except Exception:
@@ -366,9 +445,13 @@ async def _test_stalker(session, p):
     if not tok:
         return Result(False, "handshake fallito")
     ck["Authorization"] = f"Bearer {tok}"
-    st, body = await _get(
-        session, f"{base}/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml",
-        ck, 35)
+    try:
+        st, body = await _get(
+            session,
+            f"{base}/server/load.php?type=itv&action=get_all_channels&JsHttpRequest=1-xml",
+            ck, 30)
+    except Exception as e:
+        return Result(False, f"connessione: {type(e).__name__}")
     try:
         chans = (json.loads(body).get("js") or {}).get("data") or []
     except Exception:
@@ -376,7 +459,7 @@ async def _test_stalker(session, p):
     if not chans:
         return Result(False, "nessun canale nell'elenco")
     urls = [f"{base}/play/live.php?mac={p['mac']}&stream={c.get('id')}&extension=m3u8"
-            for c in _mescola(chans, 10)]
+            for c in _mescola(chans, 6)]
     f = await _primo_frame(urls)
     if f:
         return Result(True, "ok", f, f"{len(chans)} canali")
@@ -386,13 +469,20 @@ async def _test_stalker(session, p):
 async def test_list(kind, payload):
     try:
         _ensure_bins()
+    except Exception:
+        pass
+    try:
         conn = aiohttp.TCPConnector(force_close=True, limit=8)
         async with aiohttp.ClientSession(connector=conn) as s:
             if kind == "xtream":
-                return await _test_xtream(s, payload)
-            if kind == "stalker":
-                return await _test_stalker(s, payload)
-            return await _test_m3u(s, payload)
+                coro = _test_xtream(s, payload)
+            elif kind == "stalker":
+                coro = _test_stalker(s, payload)
+            else:
+                coro = _test_m3u(s, payload)
+            return await asyncio.wait_for(coro, timeout=TEST_BUDGET)
+    except asyncio.TimeoutError:
+        return Result(False, f"tempo scaduto ({TEST_BUDGET}s)")
     except Exception as e:
         return Result(False, f"errore: {type(e).__name__}")
 
@@ -407,9 +497,9 @@ def _host_voto(text, host):
         return host
     dominio = ".".join(parti[-2:])
     conta = {}
-    pat = r"(?<![a-z0-9.\-@/])[a-z0-9][a-z0-9.\-@]*\." + re.escape(dominio)
+    pat = r"(?<![a-z0-9.\-@/])[a-z0-9][a-z0-9.\-]*\." + re.escape(dominio)
     for m in re.finditer(pat, text, re.I):
-        h = m.group(0).lower().rstrip(".").replace("@", "0")
+        h = m.group(0).lower().rstrip(".")
         conta[h] = conta.get(h, 0) + 1
     if not conta:
         return host
@@ -423,18 +513,13 @@ def detect_many(text):
 
     def add(it):
         p = it["payload"]
-        key = it["kind"] + "|" + "|".join(
-            str(p.get(k, "")) for k in ("server", "url", "portal", "username", "password"))
+        key = "|".join([it["kind"], str(p.get("server", "")), str(p.get("url", "")),
+                        str(p.get("portal", "")), str(p.get("username", "")),
+                        str(p.get("password", "")), str(p.get("mac", ""))])
         if key in seen:
             return
         seen.add(key)
         items.append(it)
-
-    srv_host = None
-    m2 = re.search(r"server\s*:\s*(?:https?://)?([a-z0-9.\-]+\.[a-z]{2,})(?::(\d{2,5}))?",
-                   text, re.I)
-    if m2:
-        srv_host = (m2.group(1), m2.group(2))
 
     for m in GETPHP.finditer(text):
         raw = m.group(0)
@@ -466,12 +551,28 @@ def detect_many(text):
         if M3U_EXT.search(low):
             add({"kind": "m3u", "label": _base(u), "payload": {"url": u}})
         elif "/c/" in low or "portal.php" in low:
-            add({"kind": "stalker", "label": _base(u),
-                 "payload": {"portal": _base(u), "mac": ""}})
+            it = {"kind": "stalker", "label": _base(u),
+                  "payload": {"portal": _base(u), "mac": ""}}
+            it["_pos"] = m.start()
+            add(it)
 
-    macs = [m.group(0).upper() for m in MAC.finditer(text)]
+    mac_pos = [(m.start(), m.group(0).upper()) for m in MAC.finditer(text)]
+    usati = set()
     for it in items:
-        if it["kind"] == "stalker" and not it["payload"]["mac"] and macs:
-            it["payload"]["mac"] = macs.pop(0)
+        if it["kind"] != "stalker" or it["payload"].get("mac"):
+            it.pop("_pos", None)
+            continue
+        pos = it.pop("_pos", None)
+        if pos is None:
+            continue
+        candidati = [(abs(pos - mp), i, mm) for i, (mp, mm) in enumerate(mac_pos)
+                     if i not in usati]
+        if candidati:
+            _, i, mm = min(candidati)
+            usati.add(i)
+            it["payload"]["mac"] = mm
 
+    senza_mac = [i for i in items if i["kind"] == "stalker" and not i["payload"]["mac"]]
+    if senza_mac:
+        print(f"detect_many: {len(senza_mac)} portali scartati, MAC non trovato")
     return [i for i in items if i["kind"] != "stalker" or i["payload"]["mac"]]
