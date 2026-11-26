@@ -11,9 +11,9 @@ ORARIO_RE = re.compile(r"^([01]?\d|2[0-3])[:.,]?([0-5]\d)$")
 
 SCOPES = [
     ("gruppo", "Nel gruppo", [
-        ("sil_g_liste", "Richieste di lista nel gruppo"),
+        ("sil_g_liste", "Rispondere alle richieste di lista"),
         ("sil_g_ringraziamenti", "Registrare i ringraziamenti"),
-        ("sil_g_conferme", "Conferme brevi nel gruppo"),
+        ("sil_g_conferme", "Conferme brevi (saluti, grazie)"),
         ("sil_g_barzellette", "Barzellette sul tag"),
     ]),
     ("privato", "In privato con il bot", [
@@ -91,9 +91,9 @@ async def testo():
         righe.append(f"⚠️ {avviso}")
     righe += [
         "",
-        "Nella fascia il bot tace nel gruppo. I ringraziamenti vengono letti lo stesso: "
-        "la conferma parte in privato, così il messaggio cancellato dal bot di sicurezza "
-        "non penalizza nessuno.",
+        "Nel gruppo il bot <b>non consegna mai le liste</b>: chi chiede riceve la barzelletta "
+        "e il pulsante per la chat privata. Le consegne avvengono solo in privato, quindi "
+        "queste voci riguardano solo il comportamento durante la fascia.",
         "",
         "<b>Cosa resta acceso durante la fascia</b>",
         "Tocca una voce: verde = attivo, rosso = bloccato. Le voci fuori fascia non "
