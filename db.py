@@ -38,13 +38,14 @@ CREATE TABLE IF NOT EXISTS logs(
 
 CREATE INDEX IF NOT EXISTS idx_lists_status ON lists(status);
 CREATE INDEX IF NOT EXISTS idx_assign_user ON assignments(user_id);
+CREATE INDEX IF NOT EXISTS idx_assign_when ON assignments(assigned_at DESC);
 """
 
 DEFAULTS = {
     "cooldown_days": "7",
     "enabled": "1",
     "send_proof": "1",
-    "max_attempts": "6",
+    "max_attempts": "3",
     "anon_ttl_min": "120",
     "group_id": "0",
     "group_only": "1",
@@ -53,6 +54,7 @@ DEFAULTS = {
     "silenzio_on": "0",
     "silenzio_da": "00:00",
     "silenzio_a": "07:00",
+    "sil_totale": "0",
     "sil_g_liste": "1",
     "sil_g_ringraziamenti": "1",
     "sil_g_conferme": "1",
@@ -136,7 +138,7 @@ VECCHIE_FRASI = {
 
 FRASI_CHIAVI = list(VECCHIE_FRASI)
 
-PHRASE_VER = "4"
+PHRASE_VER = "5"
 
 VECCHIA_API = "https://italian-jokes.vercel.app/api/jokes"
 
@@ -163,6 +165,8 @@ async def init():
         versione = await c.fetchval("SELECT value FROM settings WHERE key='ph_ver'")
         if (versione or "") != PHRASE_VER:
             for k in FRASI_CHIAVI:
+                if k not in DEFAULTS:
+                    continue
                 await c.execute("UPDATE settings SET value=$2 WHERE key=$1 AND value=$3",
                                 k, DEFAULTS[k], VECCHIE_FRASI[k])
             await c.execute("INSERT INTO settings(key,value) VALUES('ph_ver',$1) "
@@ -200,7 +204,7 @@ async def get_setting(key):
 async def get_int(key):
     try:
         return int(await get_setting(key))
-    except ValueError:
+    except (TypeError, ValueError):
         return int(DEFAULTS.get(key, "0"))
 
 
@@ -402,12 +406,17 @@ async def payload_of(row):
 
 
 async def assign(lid, uid, expires_at, thanks_deadline=None):
+    """Prende la lista solo se è ancora libera. None se qualcuno l'ha già presa."""
     async with _pool.acquire() as c:
-        await c.execute("UPDATE lists SET status='assigned' WHERE id=$1", lid)
-        return await c.fetchval(
-            "INSERT INTO assignments(list_id,user_id,assigned_at,expires_at,thanks_deadline) "
-            "VALUES($1,$2,$3,$4,$5) RETURNING id",
-            lid, uid, now(), expires_at, thanks_deadline)
+        async with c.transaction():
+            preso = await c.fetchval(
+                "UPDATE lists SET status='assigned' WHERE id=$1 AND status='free' RETURNING id", lid)
+            if not preso:
+                return None
+            return await c.fetchval(
+                "INSERT INTO assignments(list_id,user_id,assigned_at,expires_at,thanks_deadline) "
+                "VALUES($1,$2,$3,$4,$5) RETURNING id",
+                lid, uid, now(), expires_at, thanks_deadline)
 
 
 async def get_assignment(aid):
@@ -422,6 +431,15 @@ async def pending_thanks(uid):
             "WHERE a.user_id=$1 AND a.revoked=FALSE AND a.thanked_at IS NULL "
             "AND a.thanks_deadline IS NOT NULL AND a.thanks_deadline > $2 "
             "ORDER BY a.id DESC LIMIT 1", uid, now())
+
+
+async def ultima_non_ringraziata(uid):
+    """Ultima consegna ancora senza ringraziamento, anche se il tempo è scaduto."""
+    async with _pool.acquire() as c:
+        return await c.fetchrow(
+            "SELECT a.*, l.kind FROM assignments a LEFT JOIN lists l ON l.id=a.list_id "
+            "WHERE a.user_id=$1 AND a.revoked=FALSE AND a.thanked_at IS NULL "
+            "AND a.thanks_deadline IS NOT NULL ORDER BY a.id DESC LIMIT 1", uid)
 
 
 async def mark_thanked(uid):
@@ -507,13 +525,14 @@ async def assignments_stats():
 
 async def revoke(aid):
     async with _pool.acquire() as c:
-        row = await c.fetchrow("SELECT * FROM assignments WHERE id=$1", aid)
-        if not row:
-            return None
-        await c.execute("UPDATE assignments SET revoked=TRUE WHERE id=$1", aid)
-        await c.execute("UPDATE lists SET status='free' WHERE id=$1", row["list_id"])
-        await c.execute("UPDATE users SET next_available=NULL WHERE user_id=$1", row["user_id"])
-        return row
+        async with c.transaction():
+            row = await c.fetchrow("SELECT * FROM assignments WHERE id=$1", aid)
+            if not row:
+                return None
+            await c.execute("UPDATE assignments SET revoked=TRUE WHERE id=$1", aid)
+            await c.execute("UPDATE lists SET status='free' WHERE id=$1", row["list_id"])
+            await c.execute("UPDATE users SET next_available=NULL WHERE user_id=$1", row["user_id"])
+            return row
 
 
 async def stats():
