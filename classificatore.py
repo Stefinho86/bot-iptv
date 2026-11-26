@@ -1,14 +1,17 @@
 import re
 
-GRAZIE = re.compile(r"\b(grazie|ringrazi\w*|ringraziam\w*|grz|thx|thanks)\b", re.I)
+GRAZIE = re.compile(r"\b(grazie|ringrazi\w*|ringraziam\w*|ti ringrazio|grz|thx|thanks)\b", re.I)
 BONTA = re.compile(r"\b(funziona|funzionante|ottima|ottimo|perfetta|perfetto|liscio|"
-                   r"va bene|tutto ok|top|grande)\b", re.I)
+                   r"va bene|tutto ok|top|grande|figata|spettacolo|ok)\b", re.I)
 SALUTO = re.compile(r"\b(ciao|salve|buongiorno|buonasera|buon pomeriggio|hey|ehi|ola)\b", re.I)
 RICHIESTA = re.compile(r"\b(lista|liste|link|m3u|iptv|posso|vorrei|mi dai|mi mandi|mandi|"
-                       r"serve|avrei|dammi|consegna|nuova)\b", re.I)
+                       r"serve|avrei|dammi|consegna|nuova|altro|altra|ancora|riprovo)\b", re.I)
+ALTRA = re.compile(r"\b(altra|altro|nuova|nuovo|ancora|seconda|riprovo|rifaccio)\b", re.I)
+NEGAZIONE = re.compile(r"\b(non funziona|non va|non parte|non si vede|non carica|"
+                       r"buona a niente|schifo|rotto|rotta|errore|problema|scaduta)\b", re.I)
 
 
-def _risposta_al_bot(msg, bot):
+def risposta_al_bot(msg, bot):
     rip = getattr(msg, "reply_to_message", None)
     if not rip:
         return False
@@ -17,10 +20,18 @@ def _risposta_al_bot(msg, bot):
 
 
 async def classifica(msg, bot, testo, ha_attesa):
-    """Restituisce ringraziamento, saluto, richiesta o ambiguo.
+    """Restituisce ringraziamento, reclamo, saluto, richiesta o ambiguo.
 
-    ha_attesa dice se l'utente ha una consegna con il ringraziamento ancora
-    aperto: senza quell'informazione "grazie" non significa niente."""
+    ha_attesa dice se l'utente ha una consegna col ringraziamento ancora
+    aperto: senza quel dato "grazie" non significa niente.
+
+    Ordine delle priorità, quando c'è un'attesa aperta:
+    1. foto o file -> ringraziamento (è lo screenshot)
+    2. "grazie" senza richiesta di un'altra lista -> ringraziamento
+    3. "non funziona", "scaduta", "errore" -> reclamo
+    4. richiesta di lista -> richiesta, anche se c'è "grazie" davanti
+    5. complimento -> ringraziamento
+    """
 
     t = (testo or "").strip()
 
@@ -30,15 +41,32 @@ async def classifica(msg, bot, testo, ha_attesa):
     if not t:
         return "ambiguo"
 
-    if ha_attesa:
-        if GRAZIE.search(t) or BONTA.search(t):
-            return "ringraziamento"
-        if SALUTO.search(t) and not RICHIESTA.search(t):
-            return "saluto"
-        return "richiesta"
+    grazie = bool(GRAZIE.search(t))
+    bonta = bool(BONTA.search(t))
+    saluto = bool(SALUTO.search(t))
+    richiesta = bool(RICHIESTA.search(t))
+    altra = bool(ALTRA.search(t))
+    negazione = bool(NEGAZIONE.search(t))
 
-    if GRAZIE.search(t) and not RICHIESTA.search(t):
+    if ha_attesa:
+        if grazie and not (altra and richiesta):
+            return "ringraziamento"
+        if negazione and not (altra and richiesta):
+            return "reclamo"
+        if richiesta:
+            return "richiesta"
+        if bonta or grazie:
+            return "ringraziamento"
+        if saluto:
+            return "saluto"
+        return "ambiguo"
+
+    if negazione and not grazie:
+        return "reclamo"
+    if richiesta:
+        return "richiesta"
+    if grazie or bonta:
         return "ringraziamento"
-    if SALUTO.search(t) and not RICHIESTA.search(t) and not _risposta_al_bot(msg, bot):
+    if saluto and not risposta_al_bot(msg, bot):
         return "saluto"
-    return "richiesta"
+    return "ambiguo"
