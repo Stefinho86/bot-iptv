@@ -115,12 +115,9 @@ class NotCommand(BaseFilter):
 
 
 class Ringrazia(BaseFilter):
-    """Messaggio che vale come ringraziamento: decide il classificatore.
-
-    Restano i paletti di base (gruppo giusto, utente non admin, consegna in
-    attesa), ma il contenuto lo legge classificatore.py invece di una regex
-    larga che pescava anche "grazie, mi passi la lista?".
-    """
+    """Messaggio di ringraziamento vero. Le precondizioni sono le stesse di
+    prima, ma la decisione finale la prende il classificatore: così un
+    "ciao @bot mi dai una lista" non viene scambiato per un grazie."""
 
     async def __call__(self, message: Message, bot) -> bool:
         try:
@@ -160,7 +157,8 @@ def user_kb(days):
     return K(inline_keyboard=[[B(text="Ricevi una lista", callback_data="u:get")]])
 
 
-def admin_menu():
+async def admin_menu():
+    enabled = await db.get_int("enabled")
     return K(inline_keyboard=[
         [B(text="🎬 Ricevi una lista", callback_data="u:get")],
         [B(text="➕ Aggiungi lista", callback_data="a:add")],
@@ -175,7 +173,9 @@ def admin_menu():
         [B(text="📦 Esporta", callback_data="a:exp"), B(text="📄 Log attività", callback_data="a:log")],
         [B(text="📖 Comandi", callback_data="a:comandi"), B(text="♻️ Ricarica bot", callback_data="a:reload")],
         [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="🩺 Stato", callback_data="a:stato")],
-        [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
+        [B(text=("⚡ Bot ATTIVO — tocca per spegnere" if enabled
+                 else "⛔ Bot SPENTO — tocca per accendere"),
+           callback_data="a:toggle")],
     ])
 
 
@@ -243,7 +243,7 @@ def back():
                               [B(text="🏠 Menu", callback_data="a:menu")]])
 
 
-def settings_kb(cooldown, proof, enabled, gonly, group_id, silenzio):
+def settings_kb(cooldown, proof, enabled, gonly, group_id, fascia):
     gid = group_id if group_id and group_id != "0" else "non impostato"
     return K(inline_keyboard=[
         [B(text=f"⏳ Attesa: {cooldown} giorni", callback_data="s:cool")],
@@ -251,8 +251,8 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id, silenzio):
         [B(text="🔗 Link d'invito", callback_data="s:link")],
         [B(text=f"🖼 Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
         [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
-        [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
-        [B(text=f"🌙 Fascia silenzio: {silenzio}", callback_data="a:orario")],
+        [B(text=("⚡ Bot: ATTIVO" if enabled else "⛔ Bot: SPENTO"), callback_data="s:toggle")],
+        [B(text=f"🌙 {fascia}", callback_data="a:orario")],
         [B(text="✏️ Frasi per l'utente", callback_data="a:frasi")],
         [B(text="⚖️ Punizione mancato ringraziamento", callback_data="a:pun")],
         [B(text="🤡 Barzellette sul tag", callback_data="a:joke")],
