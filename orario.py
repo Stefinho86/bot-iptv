@@ -1,5 +1,6 @@
 import datetime as dt
 import re
+
 from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
@@ -48,127 +49,76 @@ def _valida(da, a):
     return ""
 
 
-def dentro(da, a, quando=None):
-    """True se l'ora di Roma (o quella passata) cade nella finestra.
-    Gestisce la finestra che scavalca la mezzanotte."""
-    ora = (quando or dt.datetime.now(ROMA)).strftime("%H:%M")
-    d, f, m = _minuti(da), _minuti(a), _minuti(ora)
-    if d == f:
-        return False
-    if d < f:
-        return d <= m < f
-    return m >= d or m < f
-
-
-async def _finestra():
-    da = normalizza(await db.get_setting("silenzio_da")) or "00:00"
-    a = normalizza(await db.get_setting("silenzio_a")) or "07:00"
-    return da, a
-
-
 async def impostazioni():
     acceso = await db.get_int("silenzio_on")
-    da, a = await _finestra()
+    da = normalizza(await db.get_setting("silenzio_da")) or "00:00"
+    a = normalizza(await db.get_setting("silenzio_a")) or "07:00"
     return acceso, da, a
 
 
 async def attiva():
     if await db.get_int("silenzio_on") == 0:
         return False
-    da, a = await _finestra()
+    _acceso, da, a = await impostazioni()
     if _valida(da, a):
         return False
-    return dentro(da, a)
-
-
-async def sil_totale():
-    return await db.get_int("sil_totale") == 1
-
-
-async def totale():
-    """Silenzio totale attivo adesso: nessuna risposta ai non admin."""
-    if not await sil_totale():
-        return False
-    return await attiva()
+    ora = dt.datetime.now(ROMA).strftime("%H:%M")
+    if _minuti(da) <= _minuti(a):
+        return _minuti(da) <= _minuti(ora) < _minuti(a)
+    return _minuti(ora) >= _minuti(da) or _minuti(ora) < _minuti(a)
 
 
 async def consenti(chiave):
     if not await attiva():
         return True
-    if await sil_totale():
-        return False
     return await db.get_int(chiave) == 1
 
 
-async def stato_breve(acceso, da, a):
+def stato_breve(acceso, da, a):
     if not acceso:
         return "🔴 Fascia spenta"
-    if _valida(da, a):
-        return f"🔴 Orario non valido ({da}–{a})"
-    sil = " · 🔇 totale" if await sil_totale() else ""
-    if dentro(da, a):
-        return f"🟢 In corso fino alle {a}{sil}"
-    return f"🟡 {da}–{a} non in corso{sil}"
+    return f"🟢 Fascia {da}–{a}"
 
 
 async def testo():
     acceso, da, a = await impostazioni()
-    sil = await sil_totale()
     avviso = _valida(da, a)
-    ora = dt.datetime.now(ROMA).strftime("%H:%M")
-    in_corso = acceso and not avviso and dentro(da, a)
-
     righe = ["<b>🌙 Fascia silenzio</b>", ""]
-    if not acceso:
-        righe.append(f"Stato: <b>🔴 SPENTA</b> — orario memorizzato {da}–{a}")
-    elif avviso:
-        righe.append(f"Stato: <b>🔴 NON VALIDA</b> — {avviso}")
-    elif in_corso:
-        righe.append(f"Stato: <b>🟢 IN CORSO ADESSO</b> — sono le {ora}, "
-                     f"fino alle <b>{a}</b>")
+    if acceso:
+        righe.append(f"Stato: <b>🟢 ATTIVA</b> — dalle <b>{da}</b> alle <b>{a}</b> (ora di Roma)")
     else:
-        righe.append(f"Stato: <b>🟡 ATTIVA MA NON IN CORSO</b> — sono le {ora}, "
-                     f"scatta alle <b>{da}</b> e dura fino alle <b>{a}</b>")
-    righe.append(f"Ora di Roma: <b>{ora}</b>")
-    if sil:
-        righe.append("🔇 <b>Silenzio totale</b>: dentro la fascia il bot non risponde a "
-                     "nessuno tranne gli admin. Le voci qui sotto vengono ignorate.")
+        righe.append(f"Stato: <b>🔴 SPENTA</b> — orario memorizzato {da}–{a}")
+    if avviso:
+        righe.append(f"⚠️ {avviso}")
     righe += [
         "",
-        "Nel gruppo il bot <b>non consegna mai le liste</b>: chi chiede riceve la "
-        "barzelletta e il pulsante per la chat privata. Le consegne avvengono solo "
-        "in privato.",
+        "Nel gruppo il bot <b>non consegna mai le liste</b>: chi chiede riceve la barzelletta "
+        "e il pulsante per la chat privata. Le consegne avvengono solo in privato, quindi "
+        "queste voci riguardano solo il comportamento durante la fascia.",
         "",
         "<b>Cosa resta acceso durante la fascia</b>",
-        "Tocca una voce: 🟢 attivo, 🔴 bloccato. Fuori dalla fascia le voci non contano, "
-        "il bot lavora normalmente.",
-        "",
+        "Tocca una voce: verde = attivo, rosso = bloccato. Le voci fuori fascia non "
+        "cambiano niente, il bot lavora normalmente.",
     ]
+    for _s, titolo, voci in SCOPES:
+        righe.append("")
+        righe.append(f"<b>{titolo}</b>")
+        for chiave, etichetta in voci:
+            on = await db.get_int(chiave) == 1
+            righe.append(f"{'🟢' if on else '🔴'} {etichetta}")
     return "\n".join(righe)
 
 
-def kb(acceso, da, a):
-    sil = await sil_totale()
-    avviso = _valida(da, a)
-    if not acceso:
-        testa = "🔴 Fascia SPENTA — tocca per attivare"
-    elif avviso:
-        testa = "🔴 Orario non valido — controlla inizio e fine"
-    elif dentro(da, a):
-        testa = f"🟢 IN CORSO fino alle {a}"
-    else:
-        testa = f"🟡 Attiva {da}–{a} (non in corso)"
+async def kb(acceso, da, a):
     righe = [
-        [B(text=testa, callback_data="o:toggle")],
+        [B(text=(f"🟢 Fascia ATTIVA {da}–{a}" if acceso else "🔴 Fascia SPENTA"),
+           callback_data="o:toggle")],
         [B(text=f"🕛 Inizio: {da}", callback_data="o:da"),
          B(text=f"🕖 Fine: {a}", callback_data="o:a")],
-        [B(text=f"{'🔇' if sil else '🔊'} Silenzio totale: {'ON' if sil else 'OFF'}",
-           callback_data="o:silence")],
     ]
-    for _chiave, titolo, voci in SCOPES:
-        righe.append([B(text=f"— {titolo} —", callback_data="a:noop")])
+    for _s, titolo, voci in SCOPES:
         for chiave, etichetta in voci:
-            on = await db.get_int(chiave)
+            on = await db.get_int(chiave) == 1
             righe.append([B(text=f"{'🟢' if on else '🔴'} {etichetta}",
                             callback_data=f"o:f:{chiave}")])
     righe.append([B(text="⬅️ Indietro", callback_data="a:set")])
