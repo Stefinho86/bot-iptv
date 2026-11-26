@@ -77,10 +77,12 @@ DEFAULTS = {
                   "{quando}"),
     "joke_on": "1",
     "joke_api": "https://raw.githubusercontent.com/marchrius/Battute.json/master/battute.json",
-    "joke_testo": ("Coglionazzo! 😂❤️\n"
-                   "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
+    "joke_testo": "Coglionazzo! 😂❤️",
     "ph_privato": ("🍿 {name}, le liste le do <b>solo in privato</b>.\n"
                    "Aprimi qui sotto, premi START e te la mando subito. 😉"),
+    "ph_reclamo": ("🔧 Ok {name}, la segno come <b>non funzionante</b>.\n\n"
+                   "Mandami qui lo screenshot e un grazie taggando {bot}: così gli admin "
+                   "la ritirano e te ne danno un'altra. 🙏"),
     "welcome": ("👋 Ciao {name}!\n\n"
                 "Benvenuto nel canale liste. 🎬\n"
                 "Premi il pulsante qui sotto per ricevere la tua lista IPTV: "
@@ -128,11 +130,13 @@ VECCHIE_FRASI = {
                    "Entra nel gruppo, poi riprova con /start."),
     "no_lists": "Al momento non ci sono liste disponibili. Riprova piu tardi.",
     "broken_all": "Nessuna lista ha superato il test. Avvisa un admin.",
+    "joke_testo": ("Coglionazzo! 😂❤️\n"
+                   "Mi devi scrivere in privato se vuoi una lista! 🍿😉"),
 }
 
 FRASI_CHIAVI = list(VECCHIE_FRASI)
 
-PHRASE_VER = "3"
+PHRASE_VER = "4"
 
 VECCHIA_API = "https://italian-jokes.vercel.app/api/jokes"
 
