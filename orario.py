@@ -1,136 +1,120 @@
-import asyncio
+"""Fascia oraria di silenzio.
+
+Nella finestra impostata il bot non scrive nel gruppo, perché lì i messaggi
+vengono cancellati dal bot di sicurezza. I ringraziamenti però vengono letti e
+registrati lo stesso: la conferma parte in privato.
+"""
+
 import datetime as dt
 import re
 from zoneinfo import ZoneInfo
 
-import config
+from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
+
 import db
 
-HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-
-GIORNI = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"]
-
-CHIAVI = {
-    "lists": "Consegna liste",
-    "thanks": "Registra ringraziamenti",
-    "dm": "Conferma in privato",
-    "joke": "Barzellette sul tag",
-    "no_punish": "Sospendi punizioni",
-}
+ROMA = ZoneInfo("Europe/Rome")
+ORA_RE = re.compile(r"^\s*(\d{1,2})(?:[:.,](\d{2}))?\s*$")
 
 
-def _tz():
-    try:
-        return ZoneInfo(config.TZ_NAME)
-    except Exception:
-        return ZoneInfo("Europe/Rome")
-
-
-def adesso():
-    return dt.datetime.now(_tz())
-
-
-async def attiva():
-    return await db.get_int("sleep_on") == 1
-
-
-async def consenti(chiave):
-    """True se l'azione è ammessa in questo momento."""
-    if not await in_finestra():
-        return True
-    return await db.get_int(f"sleep_{chiave}") == 1
-
-
-async def silenzio():
-    return await db.get_int("sleep_silence") == 1
-
-
-async def conferma_privato():
-    return await db.get_int("sleep_dm") == 1
-
-
-async def sospendi_punizioni():
-    return await db.get_int("sleep_no_punish") == 1
-
-
-async def giorni():
-    raw = await db.get_setting("sleep_days") or ""
-    out = set()
-    for pezzo in raw.split(","):
-        pezzo = pezzo.strip()
-        if pezzo.isdigit() and 0 <= int(pezzo) <= 6:
-            out.add(int(pezzo))
-    return out
-
-
-def _minuti(valore, difetto):
-    m = HHMM.match((valore or "").strip())
+def _minuti(testo):
+    m = ORA_RE.match(testo or "")
     if not m:
-        hh, mm = difetto.split(":")
-        return int(hh) * 60 + int(mm)
-    hh, mm = valore.split(":")
-    return int(hh) * 60 + int(mm)
+        return None
+    h = int(m.group(1))
+    mi = int(m.group(2) or 0)
+    if h > 23 or mi > 59:
+        return None
+    return h * 60 + mi
 
 
-async def _confini():
-    inizio = _minuti(await db.get_setting("sleep_start"), "00:00")
-    fine = _minuti(await db.get_setting("sleep_end"), "07:00")
-    return inizio, fine
+def hhmm(minuti):
+    minuti %= 1440
+    return f"{minuti // 60:02d}:{minuti % 60:02d}"
 
 
-async def in_finestra(momento=None):
-    """True se adesso cade nella fascia attiva."""
-    if not await attiva():
+def normalizza(testo):
+    m = _minuti(testo)
+    return hhmm(m) if m is not None else None
+
+
+async def impostazioni():
+    acceso = await db.get_int("silenzio_on") == 1
+    da = normalizza(await db.get_setting("silenzio_da")) or "00:00"
+    a = normalizza(await db.get_setting("silenzio_a")) or "07:00"
+    return acceso, da, a
+
+
+def dentro(quando, da, a):
+    """True se l'orario locale di Roma cade nella finestra. Gestisce l'overlap."""
+    d, f = _minuti(da), _minuti(a)
+    if d is None or f is None:
         return False
-    g = await giorni()
-    if not g:
-        return False
-    ora = momento or adesso()
-    if ora.weekday() not in g:
-        return False
-    inizio, fine = await _confini()
-    if inizio == fine:
+    locale = quando.astimezone(ROMA)
+    m = locale.hour * 60 + locale.minute
+    if d == f:
         return True
-    m = ora.hour * 60 + ora.minute
-    if inizio < fine:
-        return inizio <= m < fine
-    return m >= inizio or m < fine
+    if d < f:
+        return d <= m < f
+    return m >= d or m < f
 
 
-async def attesa_riapertura():
-    while await in_finestra():
-        await asyncio.sleep(60)
+async def attiva(quando=None):
+    acceso, da, a = await impostazioni()
+    if not acceso:
+        return False
+    return dentro(quando or dt.datetime.now(dt.timezone.utc), da, a)
 
 
-async def descrizione():
-    acceso = await attiva()
-    inizio = await db.get_setting("sleep_start") or "00:00"
-    fine = await db.get_setting("sleep_end") or "07:00"
-    g = await giorni()
-    elenco = ", ".join(GIORNI[i] for i in sorted(g)) or "nessun giorno"
-    stato = "IN CORSO" if await in_finestra() else ("attiva" if acceso else "spenta")
-    righe = [
-        "<b>🌙 Fascia di silenzio</b>",
-        "",
-        f"Stato: <b>{stato}</b>",
-        f"Orario: <b>{inizio} → {fine}</b>",
-        f"Giorni: {elenco}",
-        "",
-        "<b>Cosa può fare il bot nella fascia</b>",
-    ]
-    for chiave, etichetta in CHIAVI.items():
-        si = await db.get_int(f"sleep_{chiave}") == 1
-        righe.append(f"{'🟢' if si else '🔴'} {etichetta}")
-    sil = await silenzio()
-    righe.append(f"{'🔴' if sil else '🟢'} Silenzio totale"
-                 + (" (ignora tutto tranne gli admin)" if sil else ""))
-    righe.append("")
-    if sil:
-        righe.append("Con il silenzio totale gli utenti non ricevono liste né risposte: "
-                     "solo gli admin vengono serviti. Gli interruttori sopra restano "
-                     "salvati e tornano attivi quando togli il silenzio.")
+async def riprende():
+    _, _, a = await impostazioni()
+    return a
+
+
+def stato_breve(acceso, da, a):
+    return f"ATTIVA {da}→{a}" if acceso else "SPENTA"
+
+
+def kb(acceso, da, a):
+    return K(inline_keyboard=[
+        [B(text=f"🌙 Fascia silenzio: {stato_breve(acceso, da, a)}", callback_data="o:toggle")],
+        [B(text=f"🕐 Inizio: {da}", callback_data="o:da"),
+         B(text=f"🕘 Fine: {a}", callback_data="o:a")],
+        [B(text="⬅️ Indietro", callback_data="a:set")],
+        [B(text="🏠 Menu", callback_data="a:menu")],
+    ])
+
+
+async def testo():
+    acceso, da, a = await impostazioni()
+    adesso = dt.datetime.now(dt.timezone.utc)
+    ora = adesso.astimezone(ROMA).strftime("%H:%M")
+    if not acceso:
+        stato = "SPENTA — il bot risponde a qualsiasi ora, come sempre."
+    elif dentro(adesso, da, a):
+        stato = (f"🔴 <b>IN CORSO ADESSO</b> (sono le {ora}). Fino alle {a} il bot "
+                 f"resta zitto nel gruppo.")
     else:
-        righe.append("Le azioni con 🔴 vengono saltate, le altre passano. I messaggi "
-                     "destinati al gruppo vanno in privato, così il bot di sicurezza "
-                     "non li cancella.")
-    return "\n".join(righe)
+        stato = (f"🟢 Attiva ma <b>non in corso</b> (sono le {ora}). "
+                 f"Scatta alle {da} e dura fino alle {a}.")
+    return ("<b>🌙 Fascia silenzio</b>\n\n"
+            f"{stato}\n\n"
+            "Dentro la finestra il bot non scrive nel gruppo, perché lì i messaggi vengono "
+            "cancellati dal bot di sicurezza.\n\n"
+            "<b>Cosa resta attivo</b>\n"
+            "• i ringraziamenti vengono letti e registrati lo stesso;\n"
+            "• la conferma del ringraziamento parte in privato, non nel gruppo;\n"
+            "• chi chiede una lista riceve tutto in privato.\n\n"
+            "<b>Cosa si ferma</b>\n"
+            "• barzellette e inviti nel gruppo;\n"
+            "• risposte pubbliche in generale.\n\n"
+            f"Finestra attuale: <code>{da}</code> → <code>{a}</code> (ora di Roma)")
+
+
+def _valida(da, a):
+    d, f = _minuti(da), _minuti(a)
+    if d is None or f is None:
+        return None
+    if d == f:
+        return "Inizio e fine uguali: la fascia coprirebbe l'intera giornata."
+    return None
