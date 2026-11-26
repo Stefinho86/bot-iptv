@@ -38,6 +38,7 @@ ADMIN_CMDS = USER_CMDS + [
     BotCommand(command="admin_add", description="Aggiungi admin"),
     BotCommand(command="admin_del", description="Rimuovi admin"),
     BotCommand(command="cooldown", description="Imposta giorni"),
+    BotCommand(command="orario", description="Fascia di silenzio"),
     BotCommand(command="setgroup", description="Imposta gruppo"),
     BotCommand(command="setlink", description="Imposta link gruppo"),
     BotCommand(command="verifica", description="Riverifica admin"),
