@@ -5,11 +5,10 @@ from aiogram.filters import BaseFilter
 from aiogram.types import Message
 from aiogram.types import InlineKeyboardMarkup as K, InlineKeyboardButton as B
 
+import classificatore as clf
 import db
 
 ANON_ID = 1087968824
-
-GRAZIE_RE = re.compile(r"\b(grazie|ringrazi\w*|grz|thanks|thx)\b", re.I)
 
 _TOKENS = {}
 
@@ -117,7 +116,11 @@ class NotCommand(BaseFilter):
 
 class Ringrazia(BaseFilter):
     """Messaggio di ringraziamento: gruppo giusto, utente non admin, consegna in attesa.
-    Vale il tag del bot, la risposta al bot, una foto, o una frase di grazie."""
+
+    Il classificatore pesato evita che una richiesta con "grazie" dentro venga
+    presa per ringraziamento. In fascia di silenzio passa lo stesso: il messaggio
+    viene cancellato dal bot di sicurezza ma l'update arriva comunque.
+    """
 
     async def __call__(self, message: Message, bot) -> bool:
         try:
@@ -136,19 +139,14 @@ class Ringrazia(BaseFilter):
             if message.photo:
                 return True
             testo = message.text or message.caption or ""
-            if GRAZIE_RE.search(testo):
-                return True
-            rip = message.reply_to_message
-            if rip and rip.from_user and rip.from_user.id == bot.id:
-                return True
-            if message.entities:
-                me = await bot.me()
-                for e in message.entities:
-                    if e.type == "mention":
-                        frag = testo[e.offset:e.offset + e.length].lstrip("@").lower()
-                        if frag == me.username.lower():
-                            return True
-            return False
+            rip = (message.reply_to_message and message.reply_to_message.from_user
+                   and message.reply_to_message.from_user.id == bot.id)
+            tipo = clf.classifica(
+                testo,
+                sticker=bool(message.sticker),
+                risposta_al_bot=bool(rip),
+                solo_emoji=bool(testo) and not any(c.isalnum() for c in testo))
+            return tipo == clf.THANKS
         except Exception as e:
             print(f"Ringrazia: {type(e).__name__}: {e}")
             return False
@@ -175,17 +173,18 @@ def admin_menu():
     return K(inline_keyboard=[
         [B(text="🎬 Ricevi una lista", callback_data="u:get")],
         [B(text="➕ Aggiungi lista", callback_data="a:add")],
-        [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist")],
+        [B(text="📋 Liste libere", callback_data="a:free"), B(text="📤 Assegnazioni", callback_data="a:hist:all:0")],
         [B(text="👤 Cerca utente", callback_data="a:users"), B(text="↩️ Revoca", callback_data="a:revoca")],
         [B(text="📇 Elenco utenti", callback_data="lu:0"), B(text="🛡 Elenco admin", callback_data="a:alladmins")],
         [B(text="🚫 Utenti bannati", callback_data="lp:0")],
         [B(text="🖐 Ringraziamenti manuali", callback_data="a:man")],
         [B(text="➕ Aggiungi admin", callback_data="a:admin_add"), B(text="🗑 Rimuovi admin", callback_data="a:admin_del")],
         [B(text="🔁 Reset attesa", callback_data="a:reset"), B(text="⏳ Cooldown", callback_data="s:cool")],
-        [B(text="⚙️ Impostazioni", callback_data="a:set"), B(text="📊 Statistiche", callback_data="a:stats")],
-        [B(text="📦 Esporta", callback_data="a:exp"), B(text="📄 Log attività", callback_data="a:log")],
-        [B(text="📖 Comandi", callback_data="a:comandi"), B(text="♻️ Ricarica bot", callback_data="a:reload")],
-        [B(text="🔐 Riverifica admin", callback_data="a:verify"), B(text="🩺 Stato", callback_data="a:stato")],
+        [B(text="🔕 Fascia oraria", callback_data="a:orario"), B(text="⚙️ Impostazioni", callback_data="a:set")],
+        [B(text="📊 Statistiche", callback_data="a:stats"), B(text="📄 Log attività", callback_data="a:log")],
+        [B(text="📦 Esporta", callback_data="a:exp"), B(text="📖 Comandi", callback_data="a:comandi")],
+        [B(text="♻️ Ricarica bot", callback_data="a:reload"), B(text="🩺 Stato", callback_data="a:stato")],
+        [B(text="🔐 Riverifica admin", callback_data="a:verify")],
         [B(text="⛔ Accendi / spegni bot", callback_data="a:toggle")],
     ])
 
@@ -263,6 +262,7 @@ def settings_kb(cooldown, proof, enabled, gonly, group_id):
         [B(text=f"🖼 Foto di prova: {'ON' if proof else 'OFF'}", callback_data="s:proof")],
         [B(text=f"🚦 Filtro gruppo: {'ON' if gonly else 'OFF'}", callback_data="s:gonly")],
         [B(text=f"⚡ Bot: {'ATTIVO' if enabled else 'SPENTO'}", callback_data="s:toggle")],
+        [B(text="🔕 Fascia oraria", callback_data="a:orario")],
         [B(text="✏️ Frasi per l'utente", callback_data="a:frasi")],
         [B(text="⚖️ Punizione mancato ringraziamento", callback_data="a:pun")],
         [B(text="🤡 Barzellette sul tag", callback_data="a:joke")],
